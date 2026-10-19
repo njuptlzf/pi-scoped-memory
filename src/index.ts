@@ -81,11 +81,16 @@ export function loadEntries(file: string): MemoryEntry[] {
     return [];
   }
   const out: MemoryEntry[] = [];
+  const tombstones: { at: number; key: string }[] = [];
   for (const line of raw.split("\n")) {
     if (!line.trim()) continue;
     try {
-      const e = JSON.parse(line) as MemoryEntry;
-      if (typeof e.at === "number" && typeof e.text === "string" && e.text) out.push({ at: e.at, kind: typeof e.kind === "string" ? e.kind : "", text: e.text });
+      const e = JSON.parse(line) as MemoryEntry & { forget?: string };
+      if (typeof e.at === "number" && typeof e.forget === "string") {
+        tombstones.push({ at: e.at, key: e.forget.toLowerCase() });
+      } else if (typeof e.at === "number" && typeof e.text === "string" && e.text) {
+        out.push({ at: e.at, kind: typeof e.kind === "string" ? e.kind : "", text: e.text });
+      }
     } catch {
       /* skip one corrupt line; never fail the session over it */
     }
@@ -101,7 +106,14 @@ export function loadEntries(file: string): MemoryEntry[] {
     seen.add(key);
     unique.unshift(e);
   }
-  return unique;
+  // A forget is a tombstone line: it hides entries appended before it, and a later
+  // re-remember of the same text (larger `at`) is visible again — no rewrite needed.
+  const forgottenAt = new Map<string, number>();
+  for (const t of tombstones) {
+    const at = forgottenAt.get(t.key) ?? 0;
+    if (t.at > at) forgottenAt.set(t.key, t.at);
+  }
+  return unique.filter((e) => (forgottenAt.get(e.text.toLowerCase()) ?? 0) < e.at);
 }
 
 /** Identity of the on-disk log; a changed stamp means another session/process wrote. */
@@ -145,6 +157,16 @@ export function appendEntry(file: string, entry: MemoryEntry, maxEntries: number
   const entries = loadEntries(file);
   const kept = entries.length > maxEntries * COMPACT_FACTOR ? compact(file, maxEntries) : entries;
   return kept.slice(Math.max(0, kept.length - maxEntries));
+}
+
+/** Append a tombstone for one exact point (append-only, so it is safe across
+ *  processes); compaction later drops both the tombstone and the hidden line. */
+export function forgetEntry(file: string, text: string, maxEntries: number): MemoryEntry[] {
+  const cleaned = cleanEntryText(text);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.appendFileSync(file, JSON.stringify({ at: Date.now(), forget: cleaned }) + "\n", "utf8");
+  const entries = loadEntries(file);
+  return entries.slice(Math.max(0, entries.length - maxEntries));
 }
 
 /** Rank matches: more occurrences > kind match > earlier hit, newest breaks ties.
@@ -243,6 +265,23 @@ export function scopedMemory(options: ScopedMemoryOptions) {
         snapshot = appendEntry(file, { at: Date.now(), kind, text }, max);
         stamp = logStamp(file);
         return { content: [{ type: "text", text: `已记录（当前共 ${snapshot.length} 条）。` }], details: { count: snapshot.length } };
+      },
+    });
+
+    pi.registerTool({
+      name: "forget",
+      label: "忘掉",
+      description: "删除此前记住的一条要点（用户要求忘掉或更正错误记忆时调用）。text 需与 remember 时一致，可先用 recall 查到原文再传。",
+      promptSnippet: "forget: 删除一条错误/过期的记忆（需原文）",
+      parameters: Type.Object({ text: Type.String({ description: "要忘掉的要点原文（与 remember 时一致）" }) }),
+      async execute(_id, params) {
+        const text = cleanEntryText(String(params.text ?? ""));
+        if (!text) return { content: [{ type: "text", text: "内容为空，未删除。" }], details: { count: snapshot.length } };
+        const existed = freshEntries().some((e) => e.text.toLowerCase() === text.toLowerCase());
+        if (!existed) return { content: [{ type: "text", text: "未找到与原文完全一致的记忆条目，未删除。" }], details: { count: snapshot.length } };
+        snapshot = forgetEntry(file, text, max);
+        stamp = logStamp(file);
+        return { content: [{ type: "text", text: `已删除（当前共 ${snapshot.length} 条）。` }], details: { count: snapshot.length } };
       },
     });
 

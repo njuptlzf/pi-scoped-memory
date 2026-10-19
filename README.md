@@ -36,6 +36,7 @@
 
 - `remember`（工具，模型调用）：记一条不超过 500 字符的要点，可选 `kind` 标签（枚举：`preference` / `correction` / `failure` / `fact`）。同一要点重复写入不会重复计数——读取时按文本（大小写无关）去重，后写覆盖先写。
 - `recall`（工具，模型调用）：按关键词过滤并按命中打分排序（命中次数 > kind 命中 > 更靠前的命中，时间只做平局裁决），返回前若干条（默认 10，上限 50）。
+- `forget`（工具，模型调用）：删除一条已记住的要点。`text` 需与原文一致；实现为追加一条墓碑行（append-only，跨进程安全），compaction 时连同被删行一起清掉；同一文本重新 `remember`（时间更晚）会重新可见。
 - `before_agent_start`（事件）：把**快照**追加进 `event.systemPromptOptions.appendSystemPrompt`，包在 `<user-memory>` 里；快照为空则不注入。
 
 存储是 `<dir>/entries.jsonl`：坏行跳过、**每条一次 O_APPEND 追加**（跨进程并发写不丢条目）、按条数滚动（默认 200；磁盘最多涨到 1.5× 后压缩一次，可见条数始终按上限截断）。注入上限最近 60 条、总额 4000 字符（按新到旧装，装不下的那条截断而非整条丢）。提示缓存友好——快照按文件指纹（mtime+size）懒刷新，内容没变就不改注入文本。
@@ -105,7 +106,7 @@ pi --extension ./extensions/scoped-memory.ts                        # 在本仓�
 
 已发布：npm [`pi-scoped-memory`](https://www.npmjs.com/package/pi-scoped-memory) `0.1.0` + GitHub [`njuptlzf/pi-scoped-memory`](https://github.com/njuptlzf/pi-scoped-memory)，MIT（`Copyright (c) 2026 njuptlzf`）。
 
-包里有什么：`package.json`（`pi.extensions` + `keywords: ["pi-package"]`；宿主自带的 `@earendil-works/pi-coding-agent` 与 `typebox` 声明为 `peerDependencies: "*"`，**不放 dependencies**，理由见 pi 的 `docs/packages.md`）、`src/index.ts`（**237 行**；发布的是 TS 源码，由 pi 的扩展装载器加载，不是编译产物）、CLI 薄包装 `extensions/scoped-memory.ts`、四份文档。`test/` 和 `tsconfig.json` 只进仓库、不进 tarball（由 `files` 决定）——在仓库里跑测试：`npm install && npm test`（11 例：清洗 / 坏行+滚动 / **跨进程并发追加不丢** / 子串 recall（含打分排序、**重复要点只算一条**）/ 密钥拒写（含样例）/ 注入行数上限与字符预算、无路径泄露 / fake-pi 结构 / **两个 dir 互不可见的隔离契约** / **同 dir 两会话互相可见** / 薄包装 dir 解析）。
+包里有什么：`package.json`（`pi.extensions` + `keywords: ["pi-package"]`；宿主自带的 `@earendil-works/pi-coding-agent` 与 `typebox` 声明为 `peerDependencies: "*"`，**不放 dependencies**，理由见 pi 的 `docs/packages.md`）、`src/index.ts`（**291 行**；发布的是 TS 源码，由 pi 的扩展装载器加载，不是编译产物）、CLI 薄包装 `extensions/scoped-memory.ts`、四份文档。`test/` 和 `tsconfig.json` 只进仓库、不进 tarball（由 `files` 决定）——在仓库里跑测试：`npm install && npm test`（13 例：清洗 / 坏行+滚动 / **跨进程并发追加不丢** / 子串 recall（含打分排序、**重复要点只算一条**）/ 密钥拒写（含样例）/ **forget 墓碑隐藏旧条且可被更晚写入复活**/ 注入行数上限与字符预算、无路径泄露 / fake-pi 结构 / **两个 dir 互不可见的隔离契约** / **同 dir 两会话互相可见** / 薄包装 dir 解析）。
 
 它在母项目 agent-chat（monorepo）里的位置：这个仓库是**唯一真相源**，宿主 `packages/server/src/session.ts` 直接引本仓库的 `src/index.ts`（原来那份 `packages/server/src/extensions/scoped-memory.ts` 已 `git mv` 搬走，不留第二份拷贝）。宿主侧的两例集成测试（断言落盘目录归 `(userId, scope)` 管、`agent.memory: false` 时无工具）留在 `packages/server/test/memory.test.ts`——那是宿主契约，不属于这个包。原始实现提交 `c40f503`；决策记录见 agent-chat 仓库 `docs/` 下的《软考助手 agent-chat：项目背景与开发交接文档》S2-5 行（[docs 目录](https://github.com/njuptlzf/agent-chat/tree/main/docs)）。
 

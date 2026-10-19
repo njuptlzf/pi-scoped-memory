@@ -62,6 +62,16 @@ test("loadEntries dedupes repeated points: last write wins, log stays append-onl
   rmSync(dir, { recursive: true, force: true });
 });
 
+test("loadEntries: a forget tombstone hides the older point; re-remembering revives it", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "mem-forget-"));
+  const file = path.join(dir, "entries.jsonl");
+  writeFileSync(file, '{"at":1,"kind":"","text":"过期偏好"}\n{"at":2,"kind":"","text":"有效偏好"}\n{"at":3,"forget":"过期偏好"}\n', "utf8");
+  assert.deepEqual(loadEntries(file).map((e) => e.text), ["有效偏好"]);
+  appendEntry(file, { at: 4, kind: "", text: "过期偏好" }, 50);
+  assert.deepEqual(loadEntries(file).map((e) => e.text), ["有效偏好", "过期偏好"], "newer write wins over an old tombstone");
+  rmSync(dir, { recursive: true, force: true });
+});
+
 test("appendEntry: concurrent processes all land (single O_APPEND write per entry)", async () => {
   const dir = mkdtempSync(path.join(os.tmpdir(), "mem-race-"));
   const worker = path.resolve("test/fixtures/append-worker.ts");
@@ -150,7 +160,8 @@ test("scopedMemory: remember writes the scoped file; injection extends the syste
 
   const remember = pi.tools.find((t) => t.name === "remember")!;
   const recall = pi.tools.find((t) => t.name === "recall")!;
-  assert.ok(remember && recall, "both tools registered");
+  const forget = pi.tools.find((t) => t.name === "forget")!;
+  assert.ok(remember && recall && forget, "all three tools registered");
 
   const inject = pi.handlers.find((h) => h.event === "before_agent_start")!;
   assert.ok(inject, "before_agent_start handler registered");
@@ -196,6 +207,14 @@ test("scopedMemory: remember writes the scoped file; injection extends the syste
   assert.match(secret.content[0]!.text, /未记录/);
   const after = (await recall.execute("c12", { query: "" })).content[0]!.text.split("\n").length;
   assert.equal(after, before, "rejected write does not reach the log");
+
+  await remember.execute("c13", { text: "要忘掉的偏好" });
+  const forgotten = await forget.execute("c14", { text: "要忘掉的偏好" });
+  assert.match(forgotten.content[0]!.text, /已删除/);
+  const empty = await recall.execute("c15", { query: "要忘掉" });
+  assert.match(empty.content[0]!.text, /没有匹配/);
+  const again = await forget.execute("c16", { text: "要忘掉的偏好" });
+  assert.match(again.content[0]!.text, /未找到/);
   rmSync(dir, { recursive: true, force: true });
 });
 
