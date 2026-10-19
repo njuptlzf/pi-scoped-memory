@@ -39,8 +39,8 @@
     "src",
     "extensions",
     "README.md",
+    "README.zh.md",
     "WHY-NOT-HERMES.md",
-    "README.en.md",
     "WHY-NOT-HERMES.en.md"
   ],
   "scripts": {
