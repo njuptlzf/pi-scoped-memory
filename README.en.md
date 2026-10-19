@@ -30,6 +30,8 @@ One test decides it: **can two identities ever appear in the same process?**
 
 The full argument — including why an adapter wrapping hermes does not work, and when it is worth looking back at it — is in [WHY-NOT-HERMES.en.md](./WHY-NOT-HERMES.en.md).
 
+**Installing both is not a hedge either**: coexistence degrades the boundary from "the host passes the right `dir`" to "the model picks the right `target`" — see [WHY-NOT-HERMES.en.md](./WHY-NOT-HERMES.en.md), end of section 1.
+
 ## What it does
 
 - `remember` (tool, model-invoked): store one point of at most 500 characters, with an optional `kind` tag (`preference` / `correction`, free-form).

@@ -47,6 +47,18 @@ Will a single process serve >1 user/tenant?
 
 Counter-example worth stating: **if your deployment already runs one process per user**, hermes' process-level constant is not a leak at all. The multi-tenancy reason vanishes and you should use hermes for its retrieval and consolidation quality.
 
+### So can I install both and let each cover a part?
+
+No. Coexistence is not layering — it invites the leak back. Each extension calls `registerTool` and appends to the system prompt, and pi does not stop that: the model ends up seeing two sets of "remember" tools and two injections, while hermes' read/write path still routes by its own `target`, so identity, preferences and corrections keep landing in the process-shared global directory (see ②). The tenant boundary therefore degrades from **"the host passes the right `dir`"** to **"the model happens to pick the right `target`"** — refusing that degradation is precisely why plan A was dropped in favour of B.
+
+Three concrete failures:
+
+1. **Split writes.** One "reply in Chinese" preference may land in hermes' global layer or in this extension's scope directory, so neither store is complete, and per-user erasure (row 3 above) silently leaks the other half.
+2. **Contradictory injection.** Both guidance blocks sit in the prompt at once: hermes' block tells the model to choose a target, ours assumes there is none to choose. Which one wins is sampling, not the host.
+3. **The dependencies come back.** `better-sqlite3` plus the consolidation subprocess get installed again — and "not carrying those two" is row 4's reason for picking this extension.
+
+The only defensible "use both" shape is **one process per identity, each running hermes**: there is then no second identity inside a process and no coexistence to reason about. That is the "no" branch of the tree above (with the process-pool cost attached), not two extensions loaded together.
+
 ---
 
 ## 2. Why "a narrow plugin wrapping hermes = multi-tenant hermes" does not hold
