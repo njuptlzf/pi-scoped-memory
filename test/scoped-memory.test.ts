@@ -8,6 +8,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
   appendEntry,
   cleanEntryText,
+  hasSecret,
   loadEntries,
   recallEntries,
   renderMemorySection,
@@ -36,6 +37,28 @@ test("loadEntries skips corrupt lines; appendEntry rolls oldest-first", () => {
   // until a compaction rewrites the file)
   assert.ok(loadEntries(file).length <= 8, "valid entries stay bounded");
   assert.ok(!readdirSync(dir).some((f) => f.endsWith(".tmp")), "no temp file left behind");
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test("hasSecret: rejects pasted keys, keeps ordinary sentences", () => {
+  assert.ok(hasSecret("我的 openai key 是 sk-abcdefghijklmnopqrstuvwx"));
+  assert.ok(hasSecret("password = hunter2hunter2"));
+  assert.ok(hasSecret("密钥：abcdef123456"));
+  assert.ok(!hasSecret("回答要简短，先给结论"));
+  assert.ok(!hasSecret("token 用量很大，要节省上下文"));
+  assert.ok(!hasSecret("API key 放在 .env 里，别写进记忆"));
+});
+
+test("loadEntries dedupes repeated points: last write wins, log stays append-only", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "mem-dedupe-"));
+  const file = path.join(dir, "entries.jsonl");
+  writeFileSync(
+    file,
+    '{"at":1,"kind":"preference","text":"回答要简短"}\n{"at":2,"kind":"","text":"错题要复盘"}\n{"at":3,"kind":"correction","text":"回答要简短"}\n',
+    "utf8",
+  );
+  const entries = loadEntries(file);
+  assert.deepEqual(entries.map((e) => [e.at, e.kind]), [[2, ""], [3, "correction"]], "duplicate collapses to the newest");
   rmSync(dir, { recursive: true, force: true });
 });
 
@@ -162,6 +185,17 @@ test("scopedMemory: remember writes the scoped file; injection extends the syste
   const hits = await recall.execute("c5", { query: "第三条" });
   assert.match(hits.content[0]!.text, /第三条/);
   assert.ok(!hits.content[0]!.text.includes("第四条"), "query filters");
+
+  await remember.execute("c7", { text: "重复的偏好" });
+  await remember.execute("c8", { text: "重复的偏好" });
+  const deduped = await recall.execute("c9", { query: "重复" });
+  assert.equal(deduped.content[0]!.text.split("\n").length, 1, "same point stored once");
+
+  const before = (await recall.execute("c10", { query: "" })).content[0]!.text.split("\n").length;
+  const secret = await remember.execute("c11", { text: "我的 key 是 sk-abcdefghijklmnopqrstuvwx", kind: "fact" });
+  assert.match(secret.content[0]!.text, /未记录/);
+  const after = (await recall.execute("c12", { query: "" })).content[0]!.text.split("\n").length;
+  assert.equal(after, before, "rejected write does not reach the log");
   rmSync(dir, { recursive: true, force: true });
 });
 

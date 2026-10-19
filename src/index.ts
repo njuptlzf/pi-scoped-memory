@@ -60,6 +60,19 @@ export function cleanEntryText(text: string): string {
     .replace(/<\/?user-memory>/gi, "");
 }
 
+const SECRET_PATTERNS = [
+  /\bsk-[A-Za-z0-9_-]{16,}/,
+  /\bAKIA[0-9A-Z]{16}\b/,
+  /\bgh[pousr]_[A-Za-z0-9]{20,}/,
+  /(?:api[_-]?key|secret|token|password|passwd|密码|口令|密钥)\s*[:=：]\s*\S{6,}/i,
+];
+
+/** Cheap pre-write guard. A stored key is injected into every later prompt, so
+ *  reject outright: a half-masked secret still says "a password exists here". */
+export function hasSecret(text: string): boolean {
+  return SECRET_PATTERNS.some((re) => re.test(text));
+}
+
 export function loadEntries(file: string): MemoryEntry[] {
   let raw: string;
   try {
@@ -77,7 +90,18 @@ export function loadEntries(file: string): MemoryEntry[] {
       /* skip one corrupt line; never fail the session over it */
     }
   }
-  return out;
+  // Dedupe on read (newest wins): the log is append-only, so re-remembering the
+  // same point appends a line instead of rewriting — last write is the live one.
+  const seen = new Set<string>();
+  const unique: MemoryEntry[] = [];
+  for (let i = out.length - 1; i >= 0; i--) {
+    const e = out[i]!;
+    const key = e.text.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.unshift(e);
+  }
+  return unique;
 }
 
 /** Identity of the on-disk log; a changed stamp means another session/process wrote. */
@@ -200,11 +224,21 @@ export function scopedMemory(options: ScopedMemoryOptions) {
       promptSnippet: "remember: 记录用户偏好/纠错，跨会话生效",
       parameters: Type.Object({
         text: Type.String({ description: "要记住的要点，一条一句话，不超过 500 字符" }),
-        kind: Type.Optional(Type.String({ description: "类别标签，如 preference / correction" })),
+        kind: Type.Optional(
+          Type.Union([Type.Literal("preference"), Type.Literal("correction"), Type.Literal("failure"), Type.Literal("fact")], {
+            description: "类别：preference 偏好、correction 纠错、failure 教训、fact 事实",
+          }),
+        ),
       }),
       async execute(_id, params) {
         const text = cleanEntryText(String(params.text ?? ""));
         if (!text) return { content: [{ type: "text", text: "内容为空，未记录。" }], details: { count: snapshot.length } };
+        if (hasSecret(text)) {
+          return {
+            content: [{ type: "text", text: "疑似包含密钥/口令，未记录。请改写为不含敏感值的偏好描述。" }],
+            details: { count: snapshot.length },
+          };
+        }
         const kind = cleanEntryText(String(params.kind ?? "")).slice(0, 40);
         snapshot = appendEntry(file, { at: Date.now(), kind, text }, max);
         stamp = logStamp(file);
@@ -215,7 +249,7 @@ export function scopedMemory(options: ScopedMemoryOptions) {
     pi.registerTool({
       name: "recall",
       label: "回忆",
-      description: "查询此前记住的要点（可按关键词过滤，返回最近的若干条）。",
+      description: "查询此前记住的要点（可按关键词过滤，按命中打分排序返回）。",
       promptSnippet: "recall: 查询用户的长期偏好与纠错记录",
       parameters: Type.Object({
         query: Type.Optional(Type.String({ description: "关键词过滤，留空返回最近的条目" })),

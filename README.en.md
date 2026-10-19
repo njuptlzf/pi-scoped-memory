@@ -34,7 +34,7 @@ The full argument — including why an adapter wrapping hermes does not work, an
 
 ## What it does
 
-- `remember` (tool, model-invoked): store one point of at most 500 characters, with an optional `kind` tag (`preference` / `correction`, free-form).
+- `remember` (tool, model-invoked): store one point of at most 500 characters, with an optional `kind` tag (enum: `preference` / `correction` / `failure` / `fact`). Re-storing the same point does not duplicate it: reads dedupe by text (case-insensitive) with the latest write winning.
 - `recall` (tool, model-invoked): filter by keyword and rank by score (occurrence count > kind match > earlier hit; time only breaks ties), returning the top hits (default 10, capped at 50).
 - `before_agent_start` (event): append the **snapshot** to `event.systemPromptOptions.appendSystemPrompt`, wrapped in `<user-memory>`; an empty snapshot injects nothing.
 
@@ -81,6 +81,7 @@ Multi-user hosts must **not** take path B: the wrapper resolves `dir` once per p
 | `scopedMemory(options: ScopedMemoryOptions)` | Returns a pi extension factory (pi's `ExtensionFactory` shape). `options.dir` is required and created on first write; `options.maxEntries` defaults to 200 |
 | `MemoryEntry` | `{ at: number; kind: string; text: string }` |
 | `cleanEntryText(text)` | Trust-boundary sanitisation: collapse whitespace, cap at 500 chars, strip `<user-memory>` tags (context fencing) |
+| `hasSecret(text)` | Cheap pre-write key/password screening (rejects, never stored) |
 | `loadEntries(file)` / `appendEntry(file, entry, max)` / `recallEntries(entries, q, limit)` / `renderMemorySection(entries)` | Pure functions, individually testable |
 
 The absolute `dir` path **never enters the prompt**; injected text contains only dates and entry bodies. Note that all model-facing strings (tool descriptions, labels, the injected guidance line) are currently Chinese — see `src/index.ts:105, :123-129, :142-147`.
@@ -88,13 +89,13 @@ The absolute `dir` path **never enters the prompt**; injected text contains only
 ## Boundaries and security
 
 - pi's own docs state that extensions "run inside the Pi process with the same OS permissions … only load sources you trust" (`docs/extensions.md`). This library provides no sandbox; outside `dir` it touches nothing.
-- Stored text is injected into the system prompt, i.e. it is an indirect prompt-injection surface. Mitigations present: 500-char cap per entry, `</user-memory>` stripping, 60-entry injection cap. Not present: poisoning detection, `kind` allowlists, human confirmation on write.
+- Stored text is injected into the system prompt, i.e. it is an indirect prompt-injection surface. Mitigations present: 500-char cap per entry, `</user-memory>` stripping, 60-entry injection cap. Not present: poisoning detection, human confirmation on write (an apparent secret is rejected at write time).
 - A multi-user host must guarantee **different `dir` values for different sessions in the same process**. The library reads no environment variables and guesses no identities, so it also cannot stop you from passing the wrong directory.
 
 ## Known ceilings (deliberate)
 
 - `recall` is case-insensitive **substring matching**, not semantic search.
-- Rolling is **count-based** eviction, not LLM consolidation; the same preference stored N times occupies N lines.
+- Rolling is **count-based** eviction, not LLM consolidation; the same point stored twice dedupes on read, but its historical log lines survive until compaction.
 - Injection is "the latest N within a character budget", not relevance-selected (`recall` is the ranked path).
 
 If memory quality becomes the bottleneck, the upgrade path is a consolidation pass / semantic index **on top of** `entries.jsonl`: storage shape unchanged, scope contract unchanged, host code untouched. That path is recorded in the source comment (`ponytail:`).
@@ -103,7 +104,7 @@ If memory quality becomes the bottleneck, the upgrade path is a consolidation pa
 
 Published: npm [`pi-scoped-memory`](https://www.npmjs.com/package/pi-scoped-memory) `0.1.0` + GitHub [`njuptlzf/pi-scoped-memory`](https://github.com/njuptlzf/pi-scoped-memory), MIT (`Copyright (c) 2026 njuptlzf`).
 
-What's in the tarball: `package.json` (`pi.extensions` + `keywords: ["pi-package"]`; the host-provided `@earendil-works/pi-coding-agent` and `typebox` are declared as `peerDependencies: "*"`, **not** in `dependencies` — see pi's `docs/packages.md`), `src/index.ts` (**223 lines**; the published artefact is the TypeScript source, loaded by pi's extension loader — there is no build step), the CLI wrapper `extensions/scoped-memory.ts`, and the four docs. `test/` and `tsconfig.json` live in the repository but are excluded from the tarball by `files` — to run the 10 tests, clone and `npm install && npm test` (sanitisation / corrupt-line + rolling / **concurrent cross-process appends lose nothing** / substring recall with ranking / injection line cap and character budget, no path leakage / fake-pi structure / **two directories that cannot see each other** / **two sessions on one directory see each other** / wrapper directory resolution).
+What's in the tarball: `package.json` (`pi.extensions` + `keywords: ["pi-package"]`; the host-provided `@earendil-works/pi-coding-agent` and `typebox` are declared as `peerDependencies: "*"`, **not** in `dependencies` — see pi's `docs/packages.md`), `src/index.ts` (**237 lines**; the published artefact is the TypeScript source, loaded by pi's extension loader — there is no build step), the CLI wrapper `extensions/scoped-memory.ts`, and the four docs. `test/` and `tsconfig.json` live in the repository but are excluded from the tarball by `files` — to run the 11 tests, clone and `npm install && npm test` (sanitisation / corrupt-line + rolling / **concurrent cross-process appends lose nothing** / substring recall with ranking and duplicate collapsing / injection line cap and character budget, no path leakage / fake-pi structure / **two directories that cannot see each other** / **two sessions on one directory see each other** / wrapper directory resolution).
 
 Where it came from: this repository is the **single source of truth**. Its parent project, the agent-chat monorepo, imports `src/index.ts` from here (`packages/server/src/session.ts`), and the old `packages/server/src/extensions/scoped-memory.ts` was moved out with `git mv` — there is no second copy. The two host-side integration tests (storage lands under `(userId, scope)`; `agent.memory: false` registers no tools) stay in `packages/server/test/memory.test.ts`, because they assert the host contract, not this package. Original implementation commit: `c40f503`; the decision record is the S2-5 row of the project handoff doc (Chinese), under `docs/` of the agent-chat repository ([docs directory](https://github.com/njuptlzf/agent-chat/tree/main/docs)).
 
