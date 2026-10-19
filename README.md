@@ -107,7 +107,7 @@ pi --extension ./extensions/scoped-memory.ts                        # 在本仓�
 
 ## 发布
 
-已发布：npm [`pi-scoped-memory`](https://www.npmjs.com/package/pi-scoped-memory) `0.1.0` + GitHub [`njuptlzf/pi-scoped-memory`](https://github.com/njuptlzf/pi-scoped-memory)，MIT（`Copyright (c) 2026 njuptlzf`）。仓库当前 `0.2.0`（追加写/打分/预算/去重/拒密钥/`forget`/纠错提示/`autoCapture`——见 git 历史），npm 上尚未发布 `0.2.0`；发布时注意本机默认 registry 是 npmmirror，需显式 `--registry=https://registry.npmjs.org`。
+已发布：npm [`pi-scoped-memory`](https://www.npmjs.com/package/pi-scoped-memory) `0.2.0`（latest；0.1.0 为首版）+ GitHub [`njuptlzf/pi-scoped-memory`](https://github.com/njuptlzf/pi-scoped-memory)，MIT（`Copyright (c) 2026 njuptlzf`）。`0.2.0` 带来：纯追加并发安全写、快照懒刷新、recall 打分、注入字符预算、读取去重、kind 枚举、疑似密钥拒写、`forget` 墓碑、纠错提示、`autoCapture`（默认关）。发布/查看务必显式 `--registry=https://registry.npmjs.org`（本机默认 registry 是 npmmirror）。
 
 包里有什么：`package.json`（`pi.extensions` + `keywords: ["pi-package"]`；宿主自带的 `@earendil-works/pi-coding-agent` 与 `typebox` 声明为 `peerDependencies: "*"`，**不放 dependencies**，理由见 pi 的 `docs/packages.md`）、`src/index.ts`（**369 行**；发布的是 TS 源码，由 pi 的扩展装载器加载，不是编译产物）、CLI 薄包装 `extensions/scoped-memory.ts`、四份文档。`test/` 和 `tsconfig.json` 只进仓库、不进 tarball（由 `files` 决定）——在仓库里跑测试：`npm install && npm test`（16 例：清洗 / 坏行+滚动 / **跨进程并发追加不丢** / 子串 recall（含打分排序、**重复要点只算一条**）/ 密钥拒写（含样例）/ **forget 墓碑隐藏旧条且可被更晚写入复活** / 纠错启发式 / **自动捕获按轮次触发且可注入**/ 注入行数上限与字符预算、无路径泄露 / fake-pi 结构 / **两个 dir 互不可见的隔离契约** / **同 dir 两会话互相可见** / 薄包装 dir 解析）。
 
