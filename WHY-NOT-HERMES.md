@@ -4,7 +4,7 @@
 
 对象：`pi-hermes-memory@0.9.10`（下称 hermes）与本仓库的 `scopedMemory`。
 
-**结论**：`scopedMemory` 不是 hermes 的拓展、包装或适配器，而是同一"捕获 → 存储 → 注入"模式的另一个实现。零代码交集：不 import、不依赖、不共用存储，只借鉴了一个 `execute` 返回形状（`{ content, details }`）。hermes 是这个模式的富实现（sqlite 索引、语义检索、LLM 巩固、多 target 路由），本扩展是它的**作用域安全**实现（164 行、除 `typebox` 外只用 node 内置 `fs`/`path`、只认一个目录）。
+**结论**：`scopedMemory` 不是 hermes 的拓展、包装或适配器，而是同一"捕获 → 存储 → 注入"模式的另一个实现。零代码交集：不 import、不依赖、不共用存储，只借鉴了一个 `execute` 返回形状（`{ content, details }`）。hermes 是这个模式的富实现（SQLite FTS5 索引与关键词检索、LLM 巩固、多 target 路由），本扩展是它的**作用域安全**实现（196 行、除 `typebox` 外只用 node 内置 `fs`/`path`、只认一个目录）。
 
 ---
 
@@ -29,7 +29,7 @@
 | 2 | **分区键只有宿主知道**：租户 id、备考资格、门店、团队、活动期 | hermes 只按 `cwd` 的 basename 分区（`src/project.ts:99-123`），没有 userId/tenant 概念；把身份塞进 cwd 会让租户键变成拼接文件名（含 `__` 时撞车）、且 cwd 会被 pi 打进系统提示 |
 | 3 | **有按用户擦除 / 导出义务**（合规删除、账号注销、数据导出） | scopedMemory 的一个目录 `rm -rf` 就是整份清除，jsonl 可直接导出与 diff；hermes 的 user / memory / failure 类记忆落在进程共享的全局文件与 sqlite 里，按人擦除要么做不到，要么写脆弱脚本 |
 | 4 | **不能带原生依赖或要求冷启动/镜像小** | hermes 需要 `better-sqlite3`（原生模块 / 预编译二进制），还要 spawn 子进程做巩固；纯 jsonl 扩展没有这两件事 |
-| 5 | **记忆必须可审计、可随代码 review** | 存储是一个人读的 `entries.jsonl`，坏行跳过、temp+rename 重写；sqlite 索引做不到"看 diff 就知道模型被注入了什么" |
+| 5 | **记忆必须可审计、可随代码 review** | 存储是一个人读的 `entries.jsonl`，坏行跳过、每条一次追加写；sqlite 索引做不到"看 diff 就知道模型被注入了什么" |
 | 6 | **不想让模型自己决定记忆归属** | 见下节 ②：hermes 的路由指引把最有价值的偏好类记忆主动指向全局目录；本扩展没有 target 概念，模型无从选错 |
 
 ### 该用 hermes、别用这个的场景（诚实清单）
@@ -77,7 +77,7 @@ pi 的 `tool_call` 确实能改写参数或阻止执行（`docs/extensions.md:10
 
 ### ④ fork 改造不划算
 
-把作用域塞进 hermes 要动 ~60 个源文件（核心是把 `AGENT_ROOT` 从模块常量改成构造参数、把 target 路由改成宿主注入的分区键）。实测成本远超 164 行重写。
+把作用域塞进 hermes 要动 ~60 个源文件（核心是把 `AGENT_ROOT` 从模块常量改成构造参数、把 target 路由改成宿主注入的分区键）。实测成本远超 196 行重写。
 
 ---
 

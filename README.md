@@ -36,9 +36,9 @@
 
 - `remember`（工具，模型调用）：记一条不超过 500 字符的要点，可选 `kind` 标签（如 `preference` / `correction`）。
 - `recall`（工具，模型调用）：按关键词过滤，返回最近的若干条（默认 10，上限 50）。
-- `before_agent_start`（事件）：把**冻结快照**追加进 `event.systemPromptOptions.appendSystemPrompt`，包在 `<user-memory>` 里；快照为空则不注入。
+- `before_agent_start`（事件）：把**快照**追加进 `event.systemPromptOptions.appendSystemPrompt`，包在 `<user-memory>` 里；快照为空则不注入。
 
-存储是 `<dir>/entries.jsonl`：坏行跳过、temp+rename 全量重写、按条数滚动（默认 200，超出丢最旧）。注入上限最近 60 条。提示缓存友好——快照在会话构建时读一次，只在写入后刷新，同一会话内注入文本稳定。
+存储是 `<dir>/entries.jsonl`：坏行跳过、**每条一次 O_APPEND 追加**（跨进程并发写不丢条目）、按条数滚动（默认 200；磁盘最多涨到 1.5× 后压缩一次，可见条数始终按上限截断）。注入上限最近 60 条。提示缓存友好——快照按文件指纹（mtime+size）懒刷新，内容没变就不改注入文本。
 
 工具描述明确要求模型：只在用户表达了值得跨会话遵循的偏好、纠错或结论时记录，不记录一次性问题内容与题目原文。没有"醒来保存"这类显式触发流程。
 
@@ -95,6 +95,7 @@ pi --extension ./extensions/scoped-memory.ts                        # 在本仓�
 
 - `recall` 是大小写无关的**子串匹配**，不是语义检索。
 - 滚动是**计数**淘汰，不是 LLM 巩固；同一偏好被记 N 次就占 N 行。
+- 压缩（把日志重写成上限条数）是尽力而为：与写者竞争时可能吞掉这一轮压缩，日志稍后再缩；坏行只在压缩时清掉。
 - 注入是"最近 60 条全给"，不是相关性排序。
 
 若记忆质量成为瓶颈，升级路径是在 `entries.jsonl` 之上加一趟巩固 / 语义索引，**存储形状不变、作用域契约不变**，宿主代码不动。这条路径写进源码注释（`ponytail:`）。
@@ -103,7 +104,7 @@ pi --extension ./extensions/scoped-memory.ts                        # 在本仓�
 
 已发布：npm [`pi-scoped-memory`](https://www.npmjs.com/package/pi-scoped-memory) `0.1.0` + GitHub [`njuptlzf/pi-scoped-memory`](https://github.com/njuptlzf/pi-scoped-memory)，MIT（`Copyright (c) 2026 njuptlzf`）。
 
-包里有什么：`package.json`（`pi.extensions` + `keywords: ["pi-package"]`；宿主自带的 `@earendil-works/pi-coding-agent` 与 `typebox` 声明为 `peerDependencies: "*"`，**不放 dependencies**，理由见 pi 的 `docs/packages.md`）、`src/index.ts`（**164 行**；发布的是 TS 源码，由 pi 的扩展装载器加载，不是编译产物）、CLI 薄包装 `extensions/scoped-memory.ts`、四份文档。`test/` 和 `tsconfig.json` 只进仓库、不进 tarball（由 `files` 决定）——在仓库里跑测试：`npm install && npm test`（7 例：清洗 / 坏行+滚动 / 子串 recall / 注入上限与无路径泄露 / fake-pi 结构 / **两个 dir 互不可见的隔离契约** / 薄包装 dir 解析）。
+包里有什么：`package.json`（`pi.extensions` + `keywords: ["pi-package"]`；宿主自带的 `@earendil-works/pi-coding-agent` 与 `typebox` 声明为 `peerDependencies: "*"`，**不放 dependencies**，理由见 pi 的 `docs/packages.md`）、`src/index.ts`（**196 行**；发布的是 TS 源码，由 pi 的扩展装载器加载，不是编译产物）、CLI 薄包装 `extensions/scoped-memory.ts`、四份文档。`test/` 和 `tsconfig.json` 只进仓库、不进 tarball（由 `files` 决定）——在仓库里跑测试：`npm install && npm test`（9 例：清洗 / 坏行+滚动 / **跨进程并发追加不丢** / 子串 recall / 注入上限与无路径泄露 / fake-pi 结构 / **两个 dir 互不可见的隔离契约** / **同 dir 两会话互相可见** / 薄包装 dir 解析）。
 
 它在母项目 agent-chat（monorepo）里的位置：这个仓库是**唯一真相源**，宿主 `packages/server/src/session.ts` 直接引本仓库的 `src/index.ts`（原来那份 `packages/server/src/extensions/scoped-memory.ts` 已 `git mv` 搬走，不留第二份拷贝）。宿主侧的两例集成测试（断言落盘目录归 `(userId, scope)` 管、`agent.memory: false` 时无工具）留在 `packages/server/test/memory.test.ts`——那是宿主契约，不属于这个包。原始实现提交 `c40f503`；决策记录见 agent-chat 仓库 `docs/` 下的《软考助手 agent-chat：项目背景与开发交接文档》S2-5 行（[docs 目录](https://github.com/njuptlzf/agent-chat/tree/main/docs)）。
 

@@ -20,13 +20,15 @@ import { Type } from "typebox";
  *
  * Two capture/injection points, both model-invoked (no explicit "save" flow):
  *   - tools `remember` / `recall`,
- *   - a frozen snapshot injected into the system prompt at before_agent_start.
+ *   - a snapshot injected into the system prompt at before_agent_start,
+ *     re-read lazily when the log's fingerprint changes (other sessions write too).
  *
  * Known ceilings (ponytail): recall is substring scoring, not semantic;
- * rolling is count-based, no LLM consolidation; all model-facing strings are
- * Chinese (src/index.ts:105, :123-129, :142-147). The upgrade path if memory
- * quality becomes the bottleneck is a consolidation pass over entries.jsonl,
- * not a rewrite.
+ * rolling is count-based, no LLM consolidation; compaction after the 1.5× cap is
+ * best effort and may lose a racing append (the log shrinks later). All
+ * model-facing strings are Chinese (src/index.ts:105, :123-129, :142-147). The
+ * upgrade path if memory quality becomes the bottleneck is a consolidation pass
+ * over entries.jsonl, not a rewrite.
  */
 
 export interface ScopedMemoryOptions {
@@ -45,6 +47,9 @@ export interface MemoryEntry {
 const FILE = "entries.jsonl";
 const DEFAULT_MAX = 200;
 const MAX_TEXT = 500;
+/** The log may grow to 1.5× the cap before it is rewritten: appends are the hot,
+ *  cross-process-safe path, compaction is the rare one. */
+const COMPACT_FACTOR = 1.5;
 
 /** Sanitize at the trust boundary: model-supplied text becomes storage-safe. */
 export function cleanEntryText(text: string): string {
@@ -76,15 +81,47 @@ export function loadEntries(file: string): MemoryEntry[] {
   return out;
 }
 
-/** Append with rolling cap; returns the new snapshot. Atomic-ish: full rewrite via temp+rename. */
+/** Identity of the on-disk log; a changed stamp means another session/process wrote. */
+function logStamp(file: string): string {
+  try {
+    const s = fs.statSync(file);
+    return `${s.mtimeMs}:${s.size}`;
+  } catch {
+    return "";
+  }
+}
+
+/** Rewrite the log down to `maxEntries`. Best effort only: a concurrent writer can
+ *  append to the inode we rename away, and the rename itself can throw EPERM/ENOENT
+ *  on Windows. Both are tolerated — the log just shrinks a little later. */
+function compact(file: string, maxEntries: number): MemoryEntry[] {
+  const kept = loadEntries(file).slice(-maxEntries);
+  // pid-suffixed: two processes must never share one rename source
+  const tmp = `${file}.${process.pid}.tmp`;
+  try {
+    fs.writeFileSync(tmp, kept.map((e) => JSON.stringify(e)).join("\n") + "\n", "utf8");
+    fs.renameSync(tmp, file);
+    return kept;
+  } catch {
+    try {
+      fs.rmSync(tmp, { force: true });
+    } catch {
+      /* leftover temp file is harmless */
+    }
+    return loadEntries(file);
+  }
+}
+
+/** Append one line with a single O_APPEND write, then trim lazily.
+ *  One small append per call is atomic across processes; rewriting the whole file
+ *  per call was not (probe: 4 writers × 300 entries → 347/1200 survived). */
 export function appendEntry(file: string, entry: MemoryEntry, maxEntries: number): MemoryEntry[] {
-  const next = [...loadEntries(file), entry];
-  const kept = next.slice(Math.max(0, next.length - maxEntries));
-  const tmp = `${file}.tmp`;
+  const line = JSON.stringify(entry) + "\n";
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(tmp, kept.map((e) => JSON.stringify(e)).join("\n") + "\n", "utf8");
-  fs.renameSync(tmp, file);
-  return kept;
+  fs.appendFileSync(file, line, "utf8");
+  const entries = loadEntries(file);
+  const kept = entries.length > maxEntries * COMPACT_FACTOR ? compact(file, maxEntries) : entries;
+  return kept.slice(Math.max(0, kept.length - maxEntries));
 }
 
 export function recallEntries(entries: MemoryEntry[], query: string, limit: number): MemoryEntry[] {
@@ -114,9 +151,21 @@ export function scopedMemory(options: ScopedMemoryOptions) {
   const max = options.maxEntries ?? DEFAULT_MAX;
   const file = path.join(options.dir, FILE);
   return function scopedMemoryExtension(pi: ExtensionAPI) {
-    // Frozen snapshot: read at session build; refresh on write. Keeps the
-    // before_agent_start injection stable for pi's prompt cache.
-    let snapshot = loadEntries(file);
+    // Snapshot kept for prompt-cache stability: the injected text only changes
+    // when the log actually changed (this session's write, or another session's).
+    let snapshot = loadEntries(file).slice(-max);
+    let stamp = logStamp(file);
+
+    /** Re-read only when the log changed on disk; identical content ⇒ identical
+     *  prompt text, so a touch/rewrite with the same entries does not churn cache. */
+    function freshEntries(): MemoryEntry[] {
+      const next = logStamp(file);
+      if (next !== stamp) {
+        stamp = next;
+        snapshot = loadEntries(file).slice(-max);
+      }
+      return snapshot;
+    }
 
     pi.registerTool({
       name: "remember",
@@ -133,6 +182,7 @@ export function scopedMemory(options: ScopedMemoryOptions) {
         if (!text) return { content: [{ type: "text", text: "内容为空，未记录。" }], details: { count: snapshot.length } };
         const kind = cleanEntryText(String(params.kind ?? "")).slice(0, 40);
         snapshot = appendEntry(file, { at: Date.now(), kind, text }, max);
+        stamp = logStamp(file);
         return { content: [{ type: "text", text: `已记录（当前共 ${snapshot.length} 条）。` }], details: { count: snapshot.length } };
       },
     });
@@ -147,14 +197,14 @@ export function scopedMemory(options: ScopedMemoryOptions) {
         limit: Type.Optional(Type.Number({ description: "最多返回条数，默认 10" })),
       }),
       async execute(_id, params) {
-        const hits = recallEntries(snapshot, String(params.query ?? ""), Math.min(Number(params.limit ?? 10) || 10, 50));
+        const hits = recallEntries(freshEntries(), String(params.query ?? ""), Math.min(Number(params.limit ?? 10) || 10, 50));
         const text = hits.length === 0 ? "没有匹配的记忆条目。" : hits.map((e) => `- [${new Date(e.at).toISOString().slice(0, 10)}${e.kind ? ` ${e.kind}` : ""}] ${e.text}`).join("\n");
         return { content: [{ type: "text", text }], details: { count: hits.length } };
       },
     });
 
     pi.on("before_agent_start", (event) => {
-      const section = renderMemorySection(snapshot);
+      const section = renderMemorySection(freshEntries());
       if (!section) return undefined;
       const cur = event.systemPromptOptions.appendSystemPrompt;
       event.systemPromptOptions.appendSystemPrompt = cur ? `${cur}\n\n${section}` : section;

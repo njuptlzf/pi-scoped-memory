@@ -4,7 +4,7 @@
 
 Subjects: `pi-hermes-memory@0.9.10` ("hermes") and this repository's `scopedMemory`.
 
-**Conclusion**: `scopedMemory` is not an extension, wrapper or adapter of hermes. It is another implementation of the same *capture → store → inject* pattern. Zero code overlap: no imports, no dependency, no shared storage — the only borrowing is one `execute` return shape (`{ content, details }`). hermes is the rich implementation of that pattern (sqlite index, semantic retrieval, LLM consolidation, multi-target routing); this extension is the **scope-safe** implementation (164 lines, only node built-ins `fs`/`path` besides `typebox`, and one directory as its entire interface).
+**Conclusion**: `scopedMemory` is not an extension, wrapper or adapter of hermes. It is another implementation of the same *capture → store → inject* pattern. Zero code overlap: no imports, no dependency, no shared storage — the only borrowing is one `execute` return shape (`{ content, details }`). hermes is the rich implementation of that pattern (SQLite FTS5 index and keyword search, LLM consolidation, multi-target routing); this extension is the **scope-safe** implementation (196 lines, only node built-ins `fs`/`path` besides `typebox`, and one directory as its entire interface).
 
 ---
 
@@ -33,7 +33,7 @@ Will a single process serve >1 user/tenant?
 | 2 | **Only the host knows the partition key**: tenant id, exam qualification, store, team, campaign window | hermes partitions by `cwd` basename (`src/project.ts:99-123`) and has no concept of userId/tenant. Stuffing identity into `cwd` turns the tenant key into a concatenated filename (collisions when it contains `__`) and `cwd` is put into the system prompt by pi itself |
 | 3 | **Per-user erasure / export obligations** (compliance deletion, account closure, data export) | One scopedMemory directory is erased with `rm -rf`; jsonl exports and diffs cleanly. hermes' user / memory / failure entries live in the process-shared global files and sqlite — per-person deletion is either impossible or a fragile script |
 | 4 | **No native dependencies allowed**; small cold start / image size | hermes needs `better-sqlite3` (native module / prebuilt binary) and spawns a subprocess for consolidation. A pure-jsonl extension has neither |
-| 5 | **Memory must be auditable and reviewable like code** | Storage is a human-readable `entries.jsonl`: corrupt lines skipped, full rewrite via temp+rename. A sqlite index cannot answer "what exactly was injected into the prompt" from a diff |
+| 5 | **Memory must be auditable and reviewable like code** | Storage is a human-readable `entries.jsonl`: corrupt lines skipped, one append write per entry. A sqlite index cannot answer "what exactly was injected into the prompt" from a diff |
 | 6 | **You refuse to let the model decide where a memory belongs** | See ②: hermes' routing guidance actively points the most valuable preference memories at the global directory. This extension has no target concept, so the model cannot misfile |
 
 ### Situations where hermes is the better answer (honest list)
@@ -81,7 +81,7 @@ pi's `tool_call` genuinely can mutate input or block execution (`docs/extensions
 
 ### ④ Forking is not worth it
 
-Turning scope into a hermes concept touches ~60 source files (the core of it: `AGENT_ROOT` from module constant to constructor parameter, target routing replaced by a host-supplied partition key). The measured cost far exceeds a 164-line rewrite.
+Turning scope into a hermes concept touches ~60 source files (the core of it: `AGENT_ROOT` from module constant to constructor parameter, target routing replaced by a host-supplied partition key). The measured cost far exceeds a 196-line rewrite.
 
 ---
 

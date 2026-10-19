@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -31,8 +32,33 @@ test("loadEntries skips corrupt lines; appendEntry rolls oldest-first", () => {
   let snapshot = loadEntries(file);
   for (let i = 3; i <= 7; i++) snapshot = appendEntry(file, { at: i, kind: "", text: `t${i}` }, 5);
   assert.deepEqual(snapshot.map((e) => e.text), ["t3", "t4", "t5", "t6", "t7"]);
-  assert.equal(readFileSync(file, "utf8").trim().split("\n").length, 5);
-  assert.ok(!existsSync(`${file}.tmp`), "temp file is renamed away");
+  // append-only log: bounded by the cap + compaction headroom (corrupt lines stay
+  // until a compaction rewrites the file)
+  assert.ok(loadEntries(file).length <= 8, "valid entries stay bounded");
+  assert.ok(!readdirSync(dir).some((f) => f.endsWith(".tmp")), "no temp file left behind");
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test("appendEntry: concurrent processes all land (single O_APPEND write per entry)", async () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "mem-race-"));
+  const worker = path.resolve("test/fixtures/append-worker.ts");
+  const runs = 4;
+  const per = 60;
+  await Promise.all(
+    Array.from({ length: runs }, (_, i) => {
+      return new Promise<void>((resolve, reject) => {
+        const child = spawn(process.execPath, [...process.execArgv, worker, dir, `p${i}`, String(per)], {
+          cwd: process.cwd(),
+          stdio: "inherit",
+        });
+        child.on("error", reject);
+        child.on("exit", (code) => (code === 0 ? resolve() : reject(new Error(`worker p${i} exited ${code}`))));
+      });
+    }),
+  );
+  const entries = loadEntries(path.join(dir, "entries.jsonl"));
+  assert.equal(entries.length, runs * per, "no write lost across processes");
+  assert.equal(new Set(entries.map((e) => e.text)).size, runs * per, "no entry duplicated");
   rmSync(dir, { recursive: true, force: true });
 });
 
@@ -107,7 +133,12 @@ test("scopedMemory: remember writes the scoped file; injection extends the syste
   await remember.execute("c3", { text: "第三条" });
   const capped = await remember.execute("c4", { text: "第四条" });
   assert.match(capped.content[0]!.text, /当前共 3 条/);
-  assert.deepEqual(loadEntries(file).map((e) => e.text), ["第二条", "第三条", "第四条"]);
+  const visible = await recall.execute("c6", { limit: 10 });
+  assert.deepEqual(
+    visible.content[0]!.text.split("\n").map((l) => l.replace(/^- \[[^\]]*\] /, "")),
+    ["第二条", "第三条", "第四条"],
+    "the cap bounds what is visible, not what the log may still hold on disk",
+  );
 
   const hits = await recall.execute("c5", { query: "第三条" });
   assert.match(hits.content[0]!.text, /第三条/);
@@ -140,6 +171,28 @@ test("two options with different dirs never see each other's entries", async () 
 
   rmSync(dirA, { recursive: true, force: true });
   rmSync(dirB, { recursive: true, force: true });
+});
+
+/**
+ * 同一用户在 agent-chat 里开两个会话 = 同一 dir 的两个工厂。A 的写入必须对 B
+ * 的注入和 recall 可见，否则"用户说记住的偏好"在下一个会话里凭空消失。
+ */
+test("two factories on one dir see each other's writes (fresh snapshot)", async () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "mem-stale-"));
+  const piA = fakePi();
+  const piB = fakePi();
+  scopedMemory({ dir })(piA.api);
+  scopedMemory({ dir })(piB.api);
+
+  await piA.tools.find((t) => t.name === "remember")!.execute("c1", { text: "A 写入的偏好" });
+
+  const opts = { systemPromptOptions: {} as { appendSystemPrompt?: string } };
+  piB.handlers.find((h) => h.event === "before_agent_start")!.handler(opts);
+  assert.match(opts.systemPromptOptions.appendSystemPrompt!, /A 写入的偏好/);
+
+  const hits = await piB.tools.find((t) => t.name === "recall")!.execute("c2", { query: "A 写入" });
+  assert.match(hits.content[0]!.text, /A 写入的偏好/);
+  rmSync(dir, { recursive: true, force: true });
 });
 
 // — the CLI thin wrapper —
