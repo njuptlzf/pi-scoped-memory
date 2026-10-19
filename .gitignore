@@ -1,0 +1,4 @@
+node_modules/
+# The lockfile is generated against whatever registry this machine points at
+# (a mirror here), so it is not committed.
+package-lock.json

@@ -1,0 +1,49 @@
+{
+  "name": "pi-scoped-memory",
+  "version": "0.1.0",
+  "description": "Scope-agnostic long-term memory extension for pi: remember/recall tools plus frozen-snapshot injection into the system prompt. The plugin only knows a directory; the host owns identity.",
+  "type": "module",
+  "license": "MIT",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "memory",
+    "multi-tenant"
+  ],
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/njuptlzf/pi-scoped-memory.git"
+  },
+  "homepage": "https://github.com/njuptlzf/pi-scoped-memory#readme",
+  "bugs": {
+    "url": "https://github.com/njuptlzf/pi-scoped-memory/issues"
+  },
+  "pi": {
+    "extensions": [
+      "./extensions/scoped-memory.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.0"
+  },
+  "files": [
+    "src",
+    "extensions",
+    "README.md",
+    "WHY-NOT-HERMES.md",
+    "README.en.md",
+    "WHY-NOT-HERMES.en.md"
+  ],
+  "scripts": {
+    "test": "node --import tsx --test test/*.test.ts"
+  }
+}
