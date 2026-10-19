@@ -35,6 +35,13 @@ export interface ScopedMemoryOptions {
   dir: string;
   /** Rolling cap: oldest entries are dropped first. */
   maxEntries?: number;
+  /** Opt-in background capture: every Nth turn ask the model for one point worth
+   *  keeping. Costs one extra completion per N turns, so it is off by default. */
+  autoCapture?: boolean;
+  /** Turn cadence for `autoCapture` (default 10). */
+  autoCaptureEvery?: number;
+  /** Seam for hosts/tests: replace the completion. Default: completeSimple(pi-ai). */
+  capture?: (transcript: string, model: unknown) => Promise<string | null>;
 }
 
 export interface MemoryEntry {
@@ -216,6 +223,61 @@ export function renderMemorySection(entries: MemoryEntry[], budget = INJECT_BUDG
   ].join("\n");
 }
 
+const CORRECTION_PATTERNS = [/不对/, /错了/, /不是这样/, /别这样/, /别再/, /纠正/, /更正/, /应该是/, /不要用/];
+const CORRECTION_HINT = "（用户刚指出错误：若这是长期偏好或事实更正，请调用 remember 记一条 kind=correction 的要点。）";
+
+/** Cheap heuristic on the last user turn; a false positive costs one hint line. */
+export function looksLikeCorrection(text: string): boolean {
+  return CORRECTION_PATTERNS.some((re) => re.test(text));
+}
+
+const CAPTURE_PROMPT =
+  "从下面这轮对话中提炼至多一条值得跨会话记住的长期偏好或纠错要点，一句中文，不超过 200 字。没有就只输出 NONE。只输出要点本身。";
+
+/** Last user turn + the assistant replies that followed it; capped to keep the
+ *  capture prompt cheap. Structural typing: pi messages are not re-exported here. */
+export function turnTranscript(messages: readonly { role?: string; content?: unknown }[]): string {
+  const parts: string[] = [];
+  let seenUser = false;
+  for (let i = messages.length - 1; i >= 0 && parts.length < 6; i--) {
+    const m = messages[i];
+    const text =
+      typeof m?.content === "string"
+        ? m.content
+        : Array.isArray(m?.content)
+          ? m.content.map((p) => String((p as { text?: unknown }).text ?? "")).filter(Boolean).join(" ")
+          : "";
+    if (!text) continue;
+    if (m?.role === "user") {
+      parts.unshift(`用户：${text}`);
+      seenUser = true;
+      break;
+    }
+    if (m?.role === "assistant") parts.unshift(`助手：${text}`);
+  }
+  return seenUser ? parts.join("\n").slice(-2000) : "";
+}
+
+/** Default capture: one non-streaming completion through the host's model. A
+ *  dynamic import keeps pi-ai an optional peer: hosts that never opt in pay
+ *  nothing, and a missing package just disables capture. */
+export async function defaultCapture(transcript: string, model: unknown): Promise<string | null> {
+  try {
+    const { completeSimple } = await import("@earendil-works/pi-ai/compat");
+    const reply = await completeSimple(model as never, {
+      systemPrompt: CAPTURE_PROMPT,
+      messages: [{ role: "user", content: transcript, timestamp: Date.now() }],
+    } as never);
+    const text = reply.content
+      .map((c) => (c.type === "text" ? c.text : ""))
+      .join(" ")
+      .trim();
+    return text && !/^NONE$/i.test(text) ? text : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Build a per-session extension factory. The host calls this once per session
  *  with the tenant/scope directory already resolved. */
 export function scopedMemory(options: ScopedMemoryOptions) {
@@ -303,10 +365,32 @@ export function scopedMemory(options: ScopedMemoryOptions) {
 
     pi.on("before_agent_start", (event) => {
       const section = renderMemorySection(freshEntries());
-      if (!section) return undefined;
+      // A correction in the current turn is the cheapest place to prompt capture:
+      // one line, only when the heuristic fires, so ordinary turns pay nothing.
+      const hint = event.messageType === "user" && looksLikeCorrection(event.prompt) ? CORRECTION_HINT : "";
+      const block = [section, hint].filter(Boolean).join("\n\n");
+      if (!block) return undefined;
       const cur = event.systemPromptOptions.appendSystemPrompt;
-      event.systemPromptOptions.appendSystemPrompt = cur ? `${cur}\n\n${section}` : section;
+      event.systemPromptOptions.appendSystemPrompt = cur ? `${cur}\n\n${block}` : block;
       return undefined;
     });
+
+    // Opt-in: every Nth turn, ask the model once whether anything is worth
+    // keeping. Off by default so the host decides whether to pay for it.
+    if (options.autoCapture) {
+      const every = Math.max(1, options.autoCaptureEvery ?? 10);
+      const capture = options.capture ?? defaultCapture;
+      let turns = 0;
+      pi.on("agent_end", async (event, ctx) => {
+        if (++turns % every !== 0) return;
+        const transcript = turnTranscript((event.messages ?? []) as never);
+        if (!transcript) return;
+        const point = await capture(transcript, (ctx as { model?: unknown } | undefined)?.model);
+        const text = cleanEntryText(point ?? "");
+        if (!text || hasSecret(text)) return;
+        snapshot = appendEntry(file, { at: Date.now(), kind: "fact", text }, max);
+        stamp = logStamp(file);
+      });
+    }
   };
 }

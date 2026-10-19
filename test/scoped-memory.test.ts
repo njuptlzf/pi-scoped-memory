@@ -10,9 +10,11 @@ import {
   cleanEntryText,
   hasSecret,
   loadEntries,
+  looksLikeCorrection,
   recallEntries,
   renderMemorySection,
   scopedMemory,
+  turnTranscript,
   type MemoryEntry,
 } from "../src/index.ts";
 
@@ -59,6 +61,55 @@ test("loadEntries dedupes repeated points: last write wins, log stays append-onl
   );
   const entries = loadEntries(file);
   assert.deepEqual(entries.map((e) => [e.at, e.kind]), [[2, ""], [3, "correction"]], "duplicate collapses to the newest");
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test("looksLikeCorrection: fires on correction phrasing only", () => {
+  assert.ok(looksLikeCorrection("不对，应该先给结论"));
+  assert.ok(looksLikeCorrection("你错了，别再堆术语"));
+  assert.ok(!looksLikeCorrection("讲讲这道题的解法"));
+  assert.ok(!looksLikeCorrection("回答要简短"));
+});
+
+test("turnTranscript: keeps the last user turn and the replies after it", () => {
+  const t = turnTranscript([
+    { role: "user", content: "旧问题" },
+    { role: "assistant", content: "旧回答" },
+    { role: "user", content: "以后回答先给结论" },
+    { role: "assistant", content: [{ type: "text", text: "好的" }] },
+  ]);
+  assert.match(t, /用户：以后回答先给结论/);
+  assert.match(t, /助手：好的/);
+  assert.ok(!t.includes("旧问题"));
+  assert.equal(turnTranscript([{ role: "assistant", content: "x" }]), "", "assistant-only history captures nothing");
+});
+
+test("autoCapture: off by default; on, every Nth turn stores the captured point", async () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "mem-capture-"));
+  const file = path.join(dir, "entries.jsonl");
+  const pi = fakePi();
+  const calls: string[] = [];
+  scopedMemory({
+    dir,
+    autoCapture: true,
+    autoCaptureEvery: 2,
+    capture: async (transcript) => {
+      calls.push(transcript);
+      return "回答先给结论";
+    },
+  })(pi.api);
+  const end = pi.handlers.find((h) => h.event === "agent_end")!;
+  const evt = { messages: [{ role: "user", content: "以后回答先给结论" }, { role: "assistant", content: "好" }] };
+
+  await end.handler(evt as never, { model: {} } as never);
+  assert.equal(loadEntries(file).length, 0, "below the cadence: no completion, no write");
+  await end.handler(evt as never, { model: {} } as never);
+  assert.equal(calls.length, 1);
+  assert.deepEqual(loadEntries(file).map((e) => `${e.kind}:${e.text}`), ["fact:回答先给结论"]);
+
+  const off = fakePi();
+  scopedMemory({ dir: mkdtempSync(path.join(os.tmpdir(), "mem-capture-off-")) })(off.api);
+  assert.ok(!off.handlers.some((h) => h.event === "agent_end"), "capture is opt-in");
   rmSync(dir, { recursive: true, force: true });
 });
 
@@ -139,7 +190,7 @@ test("renderMemorySection: character budget truncates the newest entry instead o
 
 interface FakePi {
   tools: Array<{ name: string; execute: (...a: unknown[]) => Promise<{ content: { text: string }[] }> }>;
-  handlers: Array<{ event: string; handler: (event: { systemPromptOptions: { appendSystemPrompt?: string } }) => void }>;
+  handlers: Array<{ event: string; handler: (event: unknown, ctx?: unknown) => unknown }>;
   api: ExtensionAPI;
 }
 
@@ -170,6 +221,22 @@ test("scopedMemory: remember writes the scoped file; injection extends the syste
   const opts0 = { systemPromptOptions: {} as { appendSystemPrompt?: string } };
   inject.handler(opts0);
   assert.equal(opts0.systemPromptOptions.appendSystemPrompt, undefined);
+
+  // a correction in the last user turn adds one capture hint line, nothing else
+  const hintEvt = {
+    systemPromptOptions: {} as { appendSystemPrompt?: string },
+    messageType: "user" as const,
+    prompt: "不对，应该先给结论",
+  };
+  inject.handler(hintEvt as never);
+  assert.match(hintEvt.systemPromptOptions.appendSystemPrompt!, /kind=correction/);
+  const plainEvt = {
+    systemPromptOptions: {} as { appendSystemPrompt?: string },
+    messageType: "user" as const,
+    prompt: "讲讲这道题",
+  };
+  inject.handler(plainEvt as never);
+  assert.equal(plainEvt.systemPromptOptions.appendSystemPrompt, undefined, "ordinary turns pay no hint");
 
   await remember.execute("c1", { text: "回答要 简短\n中文" });
   assert.match(readFileSync(file, "utf8"), /回答要 简短 中文/);
