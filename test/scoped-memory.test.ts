@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -125,7 +126,7 @@ test("loadEntries: a forget tombstone hides the older point; re-remembering revi
 
 test("appendEntry: concurrent processes all land (single O_APPEND write per entry)", async () => {
   const dir = mkdtempSync(path.join(os.tmpdir(), "mem-race-"));
-  const worker = path.resolve("test/fixtures/append-worker.ts");
+  const worker = fileURLToPath(new URL("fixtures/append-worker.ts", import.meta.url));
   const runs = 4;
   const per = 60;
   await Promise.all(

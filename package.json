@@ -1,7 +1,7 @@
 {
   "name": "pi-scoped-memory",
-  "version": "0.1.0",
-  "description": "Scope-agnostic long-term memory extension for pi: remember/recall tools plus frozen-snapshot injection into the system prompt. The plugin only knows a directory; the host owns identity.",
+  "version": "0.2.0",
+  "description": "Scope-agnostic long-term memory extension for pi: remember/recall/forget tools plus frozen-snapshot injection into the system prompt. The plugin only knows a directory; the host owns identity.",
   "type": "module",
   "license": "MIT",
   "keywords": [
