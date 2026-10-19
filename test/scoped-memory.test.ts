@@ -72,6 +72,15 @@ test("recallEntries: substring on text/kind, most recent first, limit", () => {
   assert.deepEqual(recallEntries(entries, "correction", 10).map((e) => e.at), [3]);
   assert.deepEqual(recallEntries(entries, "", 2).map((e) => e.at), [2, 3]);
   assert.equal(recallEntries(entries, "不存在", 10).length, 0);
+
+  // ranking: more occurrences beats one, kind match counts, newest breaks ties
+  const ranked: MemoryEntry[] = [
+    { at: 1, kind: "", text: "简短 简短 再说简短" },
+    { at: 2, kind: "", text: "简短一次" },
+    { at: 3, kind: "preference", text: "无关内容" },
+  ];
+  assert.deepEqual(recallEntries(ranked, "简短", 10).map((e) => e.at), [1, 2]);
+  assert.deepEqual(recallEntries(ranked, "preference", 10).map((e) => e.at), [3]);
 });
 
 test("renderMemorySection: empty → nothing; capped at the latest 60; no paths", () => {
@@ -81,6 +90,16 @@ test("renderMemorySection: empty → nothing; capped at the latest 60; no paths"
   assert.ok(section.startsWith("<user-memory>") && section.endsWith("</user-memory>"));
   assert.ok(!section.includes("e19") && section.includes("e79"), "oldest dropped first");
   assert.equal(section.split("\n").length, 63); // open + guidance + 60 lines + close
+});
+
+test("renderMemorySection: character budget truncates the newest entry instead of blowing the prompt", () => {
+  const big: MemoryEntry[] = Array.from({ length: 30 }, (_, i) => ({ at: i + 1, kind: "", text: "x".repeat(500) }));
+  const section = renderMemorySection(big);
+  assert.ok(section.length <= 4100, `budgeted (${section.length} chars)`);
+  const xs = (section.match(/x/g) ?? []).length;
+  assert.ok(xs <= 4000, `stored bytes stay under the budget (${xs})`);
+  const lines = section.split("\n").filter((l) => l.startsWith("- "));
+  assert.ok(lines.length >= 6 && lines.length <= 8, `budget-limited line count (${lines.length})`);
 });
 
 // — plugin structure via a fake ExtensionAPI (no model, no network) —

@@ -35,10 +35,10 @@ The full argument — including why an adapter wrapping hermes does not work, an
 ## What it does
 
 - `remember` (tool, model-invoked): store one point of at most 500 characters, with an optional `kind` tag (`preference` / `correction`, free-form).
-- `recall` (tool, model-invoked): filter by keyword, return the most recent hits (default 10, capped at 50).
+- `recall` (tool, model-invoked): filter by keyword and rank by score (occurrence count > kind match > earlier hit; time only breaks ties), returning the top hits (default 10, capped at 50).
 - `before_agent_start` (event): append the **snapshot** to `event.systemPromptOptions.appendSystemPrompt`, wrapped in `<user-memory>`; an empty snapshot injects nothing.
 
-Storage is `<dir>/entries.jsonl`: corrupt lines are skipped, **each entry is one O_APPEND write** (concurrent writers in different processes lose nothing), entries roll over by count (default 200; the log may grow to 1.5× before it is compacted once, while the visible set stays capped). Injection is capped at the latest 60 entries. Prompt-cache friendly — the snapshot is refreshed lazily by file fingerprint (mtime+size), so the injected text only changes when the entries do.
+Storage is `<dir>/entries.jsonl`: corrupt lines are skipped, **each entry is one O_APPEND write** (concurrent writers in different processes lose nothing), entries roll over by count (default 200; the log may grow to 1.5× before it is compacted once, while the visible set stays capped). Injection is capped at the latest 60 entries and 4000 characters total (filled newest-first; the entry that does not fit is truncated, not dropped). Prompt-cache friendly — the snapshot is refreshed lazily by file fingerprint (mtime+size), so the injected text only changes when the entries do.
 
 The tool descriptions explicitly tell the model to record only preferences, corrections or conclusions the user stated as worth following across sessions — never one-off question content or the wording of an exercise. There is no explicit "wake up and save" flow.
 
@@ -95,7 +95,7 @@ The absolute `dir` path **never enters the prompt**; injected text contains only
 
 - `recall` is case-insensitive **substring matching**, not semantic search.
 - Rolling is **count-based** eviction, not LLM consolidation; the same preference stored N times occupies N lines.
-- Injection is "the latest 60, all of them", not relevance ranking.
+- Injection is "the latest N within a character budget", not relevance-selected (`recall` is the ranked path).
 
 If memory quality becomes the bottleneck, the upgrade path is a consolidation pass / semantic index **on top of** `entries.jsonl`: storage shape unchanged, scope contract unchanged, host code untouched. That path is recorded in the source comment (`ponytail:`).
 
@@ -103,7 +103,7 @@ If memory quality becomes the bottleneck, the upgrade path is a consolidation pa
 
 Published: npm [`pi-scoped-memory`](https://www.npmjs.com/package/pi-scoped-memory) `0.1.0` + GitHub [`njuptlzf/pi-scoped-memory`](https://github.com/njuptlzf/pi-scoped-memory), MIT (`Copyright (c) 2026 njuptlzf`).
 
-What's in the tarball: `package.json` (`pi.extensions` + `keywords: ["pi-package"]`; the host-provided `@earendil-works/pi-coding-agent` and `typebox` are declared as `peerDependencies: "*"`, **not** in `dependencies` — see pi's `docs/packages.md`), `src/index.ts` (**196 lines**; the published artefact is the TypeScript source, loaded by pi's extension loader — there is no build step), the CLI wrapper `extensions/scoped-memory.ts`, and the four docs. `test/` and `tsconfig.json` live in the repository but are excluded from the tarball by `files` — to run the 9 tests, clone and `npm install && npm test` (sanitisation / corrupt-line + rolling / **concurrent cross-process appends lose nothing** / substring recall / injection cap with no path leakage / fake-pi structure / **two directories that cannot see each other** / **two sessions on one directory see each other** / wrapper directory resolution).
+What's in the tarball: `package.json` (`pi.extensions` + `keywords: ["pi-package"]`; the host-provided `@earendil-works/pi-coding-agent` and `typebox` are declared as `peerDependencies: "*"`, **not** in `dependencies` — see pi's `docs/packages.md`), `src/index.ts` (**223 lines**; the published artefact is the TypeScript source, loaded by pi's extension loader — there is no build step), the CLI wrapper `extensions/scoped-memory.ts`, and the four docs. `test/` and `tsconfig.json` live in the repository but are excluded from the tarball by `files` — to run the 10 tests, clone and `npm install && npm test` (sanitisation / corrupt-line + rolling / **concurrent cross-process appends lose nothing** / substring recall with ranking / injection line cap and character budget, no path leakage / fake-pi structure / **two directories that cannot see each other** / **two sessions on one directory see each other** / wrapper directory resolution).
 
 Where it came from: this repository is the **single source of truth**. Its parent project, the agent-chat monorepo, imports `src/index.ts` from here (`packages/server/src/session.ts`), and the old `packages/server/src/extensions/scoped-memory.ts` was moved out with `git mv` — there is no second copy. The two host-side integration tests (storage lands under `(userId, scope)`; `agent.memory: false` registers no tools) stay in `packages/server/test/memory.test.ts`, because they assert the host contract, not this package. Original implementation commit: `c40f503`; the decision record is the S2-5 row of the project handoff doc (Chinese), under `docs/` of the agent-chat repository ([docs directory](https://github.com/njuptlzf/agent-chat/tree/main/docs)).
 

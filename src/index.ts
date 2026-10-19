@@ -26,9 +26,8 @@ import { Type } from "typebox";
  * Known ceilings (ponytail): recall is substring scoring, not semantic;
  * rolling is count-based, no LLM consolidation; compaction after the 1.5× cap is
  * best effort and may lose a racing append (the log shrinks later). All
- * model-facing strings are Chinese (src/index.ts:105, :123-129, :142-147). The
- * upgrade path if memory quality becomes the bottleneck is a consolidation pass
- * over entries.jsonl, not a rewrite.
+ * model-facing strings are Chinese. The upgrade path if memory quality becomes
+ * the bottleneck is a consolidation pass over entries.jsonl, not a rewrite.
  */
 
 export interface ScopedMemoryOptions {
@@ -124,19 +123,45 @@ export function appendEntry(file: string, entry: MemoryEntry, maxEntries: number
   return kept.slice(Math.max(0, kept.length - maxEntries));
 }
 
+/** Rank matches: more occurrences > kind match > earlier hit, newest breaks ties.
+ *  Still substring matching, not retrieval — see the ceilings in the header. */
 export function recallEntries(entries: MemoryEntry[], query: string, limit: number): MemoryEntry[] {
   const q = query.trim().toLowerCase();
-  const hits = q
-    ? entries.filter((e) => e.text.toLowerCase().includes(q) || e.kind.toLowerCase().includes(q))
-    : entries;
-  return hits.slice(Math.max(0, hits.length - limit));
+  if (!q) return entries.slice(Math.max(0, entries.length - limit));
+  const scored: Array<{ entry: MemoryEntry; score: number }> = [];
+  for (const entry of entries) {
+    const text = entry.text.toLowerCase();
+    let hits = 0;
+    for (let at = text.indexOf(q); at !== -1; at = text.indexOf(q, at + q.length)) hits++;
+    const kindHit = entry.kind.toLowerCase().includes(q);
+    if (!hits && !kindHit) continue;
+    scored.push({ entry, score: hits * 10 + (kindHit ? 5 : 0) + (text.startsWith(q) ? 3 : 0) });
+  }
+  scored.sort((a, b) => b.score - a.score || b.entry.at - a.entry.at);
+  return scored.slice(0, Math.max(0, limit)).map((s) => s.entry);
 }
 
-export function renderMemorySection(entries: MemoryEntry[]): string {
+const INJECT_LINES = 60;
+/** Character budget for the injected block: the prompt pays for every stored byte. */
+const INJECT_BUDGET = 4000;
+
+export function renderMemorySection(entries: MemoryEntry[], budget = INJECT_BUDGET): string {
   if (entries.length === 0) return "";
-  const lines = entries
-    .slice(-60) // injection cap: the prompt pays for every stored byte
-    .map((e) => `- [${new Date(e.at).toISOString().slice(0, 10)}${e.kind ? ` ${e.kind}` : ""}] ${e.text}`);
+  const lines: string[] = [];
+  let used = 0;
+  for (let i = entries.length - 1; i >= 0 && lines.length < INJECT_LINES; i--) {
+    const entry = entries[i]!;
+    const head = `- [${new Date(entry.at).toISOString().slice(0, 10)}${entry.kind ? ` ${entry.kind}` : ""}] `;
+    const full = head + entry.text;
+    const room = budget - used;
+    if (full.length > room) {
+      // keep the newest entry partially rather than dropping it whole
+      if (room > head.length) lines.unshift(head + entry.text.slice(0, room - head.length));
+      break;
+    }
+    lines.unshift(full);
+    used += full.length + 1; // + newline
+  }
   return [
     "<user-memory>",
     "以下是本作用域内此前记住的偏好与纠错要点，回答时遵循它们：",
