@@ -124,22 +124,58 @@ test("loadEntries: a forget tombstone hides the older point; re-remembering revi
   rmSync(dir, { recursive: true, force: true });
 });
 
+/**
+ * 起一个跑 `.ts` 的子进程并等它结束。失败时把**子进程自己的输出**拼进错误——
+ * 这条约定是 2026-11-08 定的：以前用 `stdio: "inherit"`，子进程的 stderr 直接
+ * 进终端，node:test 不会把它挂到失败的测试上，于是 CI 上偶发的那次只留下
+ * `worker p1 exited 1`，真因无从查证（挂账好几天）。
+ *
+ * 参数也顺手收紧：只继承加载 `.ts` 需要的 execArgv，剔掉测试运行器自己的
+ * `--test*`（worker 不是测试）。
+ */
+function runWorker(worker: string, args: string[]): Promise<void> {
+  const childArgv = process.execArgv.filter((a) => !a.startsWith("--test"));
+  if (!childArgv.some((a) => a.includes("tsx"))) childArgv.unshift("--import", "tsx");
+  return new Promise<void>((resolve, reject) => {
+    const child = spawn(process.execPath, [...childArgv, worker, ...args], {
+      cwd: process.cwd(),
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let out = "";
+    const keep = (d: Buffer) => {
+      if (out.length < 4000) out += d.toString();
+    };
+    child.stdout?.on("data", keep);
+    child.stderr?.on("data", keep);
+    child.on("error", (err) => reject(new Error(`worker failed to spawn: ${err.message}`)));
+    child.on("exit", (code, signal) => {
+      if (code === 0) return resolve();
+      const why = signal ? `signal ${signal}` : `exit ${code}`;
+      reject(new Error(`worker ${why}${out.trim() ? `\n--- child output ---\n${out.trim()}` : "\n(child produced no output)"}`));
+    });
+  });
+}
+
+test("runWorker: a crashed child fails with its own stderr, not a bare exit code", async () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "mem-crash-"));
+  const crasher = path.join(dir, "crash-worker.mjs");
+  writeFileSync(crasher, 'console.error("BOOM: deliberate probe"); process.exit(3);\n', "utf8");
+  // .mjs 不需要 tsx，但 runWorker 仍会带上加载器——顺带证明多带参数不影响执行。
+  await assert.rejects(runWorker(crasher, []), (err: Error) => {
+    assert.match(err.message, /exit 3/, "exit code is reported");
+    assert.match(err.message, /BOOM: deliberate probe/, "child stderr is carried into the failure");
+    return true;
+  });
+  rmSync(dir, { recursive: true, force: true });
+});
+
 test("appendEntry: concurrent processes all land (single O_APPEND write per entry)", async () => {
   const dir = mkdtempSync(path.join(os.tmpdir(), "mem-race-"));
   const worker = fileURLToPath(new URL("fixtures/append-worker.ts", import.meta.url));
   const runs = 4;
   const per = 60;
   await Promise.all(
-    Array.from({ length: runs }, (_, i) => {
-      return new Promise<void>((resolve, reject) => {
-        const child = spawn(process.execPath, [...process.execArgv, worker, dir, `p${i}`, String(per)], {
-          cwd: process.cwd(),
-          stdio: "inherit",
-        });
-        child.on("error", reject);
-        child.on("exit", (code) => (code === 0 ? resolve() : reject(new Error(`worker p${i} exited ${code}`))));
-      });
-    }),
+    Array.from({ length: runs }, (_, i) => runWorker(worker, [dir, `p${i}`, String(per)])),
   );
   const entries = loadEntries(path.join(dir, "entries.jsonl"));
   assert.equal(entries.length, runs * per, "no write lost across processes");

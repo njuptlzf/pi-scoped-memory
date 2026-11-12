@@ -193,12 +193,18 @@ pi --extension ./extensions/scoped-memory.ts                        # 在本仓�
 ## 发布
 
 **已发布。** npm [`pi-scoped-memory`](https://www.npmjs.com/package/pi-scoped-memory)
-`0.2.0`（latest；0.1.0 为首版）+ GitHub
+`0.3.0`（latest；0.1.0 为首版）+ GitHub
 [`njuptlzf/pi-scoped-memory`](https://github.com/njuptlzf/pi-scoped-memory)，
 MIT（`Copyright (c) 2026 njuptlzf`）。
 
 `0.2.0` 带来：纯追加并发安全写、快照懒刷新、recall 打分、注入字符预算、读取去重、
 kind 枚举、疑似密钥拒写、`forget` 墓碑、纠错提示、`autoCapture`（默认关）。
+
+`0.3.0` 带来：条件导出——`agent-chat-source` → `src/index.ts`（monorepo 内开发用），
+`default`/`types` → `dist/`（普通 npm 消费方用）。此前 tarball 是纯源码分发
+（`exports` 直指 `src/index.ts`），任何 Node 不剥离 `node_modules` 下类型的消费方
+都会 import 失败。0.3.0 起发布产物由 `npm run build` 编译（`prepublishOnly` 自动
+执行）；pi 的 CLI 扩展装载器仍通过 `pi.extensions` 入口直接读 `src/index.ts`。
 
 发布 / 查看务必显式 `--registry=https://registry.npmjs.org`——本机默认 registry 是
 npmmirror，会拒绝。
@@ -208,13 +214,15 @@ npmmirror，会拒绝。
 - `package.json` — `pi.extensions` + `keywords: ["pi-package"]`。宿主自带的
   `@earendil-works/pi-coding-agent` 与 `typebox` 声明为 `peerDependencies: "*"`，
   **不放 dependencies**，理由见 pi 的 `docs/packages.md`。
-- `src/index.ts`（约 396 行）— 发布的是 TS 源码，由 pi 的扩展装载器加载，不是编译
-  产物。
+- `src/index.ts`（约 396 行）— TS 源码，由 pi 的扩展装载器（`pi.extensions`）
+  与源码条件消费方直接加载。
+- `dist/index.js` + `dist/index.d.ts` — 编译产物（0.3.0 起），普通 npm 消费方走
+  `default`/`types` 解析命中它。由 `npm run build` 生成，不进 git。
 - `extensions/scoped-memory.ts` — CLI 薄包装。
 - 四份文档（`README.md`、`README.zh.md`、`WHY-NOT-HERMES.md`、`WHY-NOT-HERMES.en.md`）。
 
-`test/` 和 `tsconfig.json` 只进仓库、不进 tarball（由 `files` 决定）。在仓库里跑
-16 例测试：clone 后 `npm install && npm test`——清洗 / 坏行 + 滚动 /
+`test/` 和 `tsconfig*.json` 只进仓库、不进 tarball（由 `files` 决定）。在仓库里跑
+17 例测试：clone 后 `npm install && npm test`——清洗 / 坏行 + 滚动 /
 **跨进程并发追加不丢** / 子串 recall（含打分排序、**重复要点只算一条**）/
 **forget 墓碑隐藏旧条且可被更晚写入复活** / 纠错启发式 / **自动捕获按轮次触发且
 可注入** / 注入行数上限与字符预算、无路径泄露 / fake-pi 结构 / **两个 dir 互不
@@ -222,11 +230,12 @@ npmmirror，会拒绝。
 
 ### 它从哪来
 
-这个仓库是**唯一真相源**。它的母项目 agent-chat（monorepo）直接引本仓库的
-`src/index.ts`（`packages/server/src/session.ts`），原来那份
-`packages/server/src/extensions/scoped-memory.ts` 已 `git mv` 搬走——不留第二份
-拷贝。宿主侧的两例集成测试（断言落盘目录归 `(userId, scope)` 管、
+这个仓库是**唯一真相源**。它的母项目 agent-chat（monorepo）按 npm 版本消费本包
+（`pi-scoped-memory: ^0.3.0`，在 `packages/server/src/session.ts` import）。
+monorepo 里曾短暂存在过一份 `opensource/pi-scoped-memory/` 副本，独立仓补齐它的
+增量（0.3.0 条件导出、测试运行器加固）后已删除——不留第二份拷贝。更早之前，
+`packages/server/src/extensions/scoped-memory.ts` 以 `git mv` 迁出。宿主侧的两例集成测试（断言落盘目录归 `(userId, scope)` 管、
 `agent.memory: false` 时无工具）留在 `packages/server/test/memory.test.ts`——那是
 宿主契约，不属于这个包。原始实现提交 `c40f503`；决策记录见 agent-chat 仓库
-`docs/` 下的《软考助手 agent-chat：项目背景与开发交接文档》S2-5 行
+`docs/` 下的项目背景与开发交接文档（中文）S2-5 行
 （[docs 目录](https://github.com/njuptlzf/agent-chat/tree/main/docs)）。
