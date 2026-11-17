@@ -1,0 +1,27 @@
+name: icu-probe
+
+# One-off empirical check for ROADMAP R1: does Intl.Segmenter tokenize
+# Chinese correctly inside the official slim/alpine node images, where ICU
+# data completeness differs from the full images? Manual dispatch only, so
+# it stays out of the normal CI path.
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Probe Intl.Segmenter CJK in official node images
+        run: |
+          for img in node:22-slim node:22-alpine node:24-slim node:24-alpine; do
+            echo "===================== $img ====================="
+            docker run --rm "$img" node --no-warnings -e '
+              const seg = new Intl.Segmenter("zh", { granularity: "word" });
+              const toks = (t) => [...seg.segment(t)].filter((x) => x.isWordLike).map((x) => x.segment).join(" / ");
+              console.log("node:", process.version, "| icu:", process.versions.icu);
+              console.log("segmenter locale resolved to:", new Intl.Segmenter("zh").resolvedOptions().locale);
+              console.log("probe1 (zh):", toks("登录认证报错 ERR_AUTH_403"));
+              console.log("probe2 (zh):", toks("用户偏好深色主题"));
+              console.log("probe3 (zh):", toks("2字查询登录"));
+            '
+          done
