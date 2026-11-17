@@ -73,6 +73,13 @@ is stored as `<dir>/index.minisearch.json`, rebuilt from `entries.jsonl` on
 first touch, deleted without harm at any time. `node:sqlite` FTS5 (trigram)
 remains a fallback option for ASCII-heavy scopes, not the primary path.
 
+- **Implementation note (do not forget)**: create one `Intl.Segmenter`
+  instance per locale and reuse it (module-level or factory-level cache) —
+  never construct a new Segmenter per entry or per query. Segmenter
+  construction is a costly ICU operation and would dominate tokenize time on
+  bulk index rebuilds. Same for the MiniSearch instance: one per scope dir,
+  lazily created on first index touch.
+
 - **Trigger**: real recall-miss reports from a host, or a scope exceeding ~500
   entries.
 - **Constraint check**: index is per-scope (constraint 2/3), MiniSearch is pure
