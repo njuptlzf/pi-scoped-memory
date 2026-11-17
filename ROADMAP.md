@@ -81,6 +81,9 @@ remains a fallback option for ASCII-heavy scopes, not the primary path.
 - **Acceptance**: recall@5 on a 1000-entry synthetic scope (Chinese and mixed
   zh/en entries) strictly better than substring scoring; 2-char CJK queries
   ("登录") hit; a deleted index self-rebuilds on next recall.
+- **Decision (2026-11-17, host confirmed)**: cold-start full rebuild latency at
+  ~1000 entries is accepted as-is for R1 — no gating benchmark on it. Optimizing
+  the rebuild path is deferred to backlog item B1.
 
 ### R2 — Hybrid recall: FTS + host-injected embeddings, rank-fused
 
@@ -106,6 +109,26 @@ Reference shape: Mem0-style fact retrieval, minus the managed service.
   vector leg; removing the callback never breaks a session; a query returns
   within 50 ms P95 at 1000 entries with warm caches (local benchmark, no
   network).
+
+## Backlog (low priority)
+
+### B1 — Cold-start index rebuild optimization
+
+R1 rebuilds the MiniSearch index from `entries.jsonl` on first touch after a
+restart. At ~1000 entries the host accepted the full-rebuild latency as-is
+(decision recorded under R1), so this item is explicitly **not** on the
+critical path. Options when it ever matters, in order of cost:
+
+1. Load the persisted `index.minisearch.json` via `MiniSearch.loadJSON()`
+   instead of re-tokenizing every entry; validate it against the jsonl's
+   content hash and fall back to full rebuild on mismatch.
+2. Incremental: index only entries appended since the last index write
+   (jsonl line offset persisted alongside the index).
+
+- **Trigger**: any host reporting perceptible first-query latency after
+  restart, or a scope growing past ~5000 entries.
+- **Constraint check**: both options keep the jsonl as source of truth and the
+  index rebuildable/deletable (constraint 2); no new dependencies.
 
 ## Sourcing: import vs build
 
