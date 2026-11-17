@@ -117,22 +117,6 @@ one connection (`AtomicLockCoordinator.closeHandle()`), not every tenant's.
 `tests/scoped/multi-tenant.test.ts` asserts the delete succeeds, because
 "one `rm -rf` = one tenant gone" is the promise this fork exists to keep.
 
-**F0 目标修正（2026-11-17，晚）**：agent-chat 尚未上线，记忆改为**面向接口**——宿主定义
-`MemoryProvider` 端口（`packages/protocol/src/memory-provider.ts`），manifest 用
-`agent.memory: { provider }` 选实现。于是 fork 的义务从"drop-in 兼容 scopedMemory"缩小为
-"满足端口"，这反而更稳：端口只有 open/mount 分离、selfInjects、erase、dispose 四条约定。
-
-- `openScopedHermesMemory(options)` 不带 pi 返回租户（store、`promptSection`、`erase`、`dispose`），
-  `mount(pi)` 再挂工具与钩子——因为宿主组装 `DefaultResourceLoader` 时就要拿到段落文本。
-- `selfInjects: false`：段落由宿主拼进 `appendSystemPrompt`。这同时消除了上一版发现的
-  "bindExtensions 有条件 → 自注入实现的钩子静默不触发"的隐患。
-- `erase()` 升级为一等公民（端口要求）：关掉租户锁库、只删该租户根；测试断言邻居数据存活。
-- 契约测试在宿主仓（`memory-provider-conformance.test.ts`），按注册表逐项跑，新实现自动覆盖。
-
-仍未做：**item 3 路由提示作用域化**。现在宿主逐字注入 `promptSection()`，那段措辞直接进
-系统提示，所以 `buildMemoryTargetRoutingGuidance()` 里"偏好写 user、跨项目经验写 memory"
-的指引必须改成作用域相对说法——这是剩下唯一会真正影响模型行为的改动。
-
 **F0 target corrected (2026-11-17, later).** agent-chat is pre-launch, and memory
 is now a **port** rather than a plugin: the host defines `MemoryProvider`
 (`packages/protocol/src/memory-provider.ts`) and a product picks an
