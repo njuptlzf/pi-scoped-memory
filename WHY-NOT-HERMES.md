@@ -79,6 +79,8 @@ pi 的 `tool_call` 确实能改写参数或阻止执行（`docs/extensions.md:10
 
 把作用域塞进 hermes 要动 ~60 个源文件（核心是把 `AGENT_ROOT` 从模块常量改成构造参数、把 target 路由改成宿主注入的分区键）。实测成本远超 196 行重写。
 
+> **2026-11-17 重探注记（hermes@0.11.0）**：上段结论基于 0.9.10 探针，0.11.0 的 diff 面已显著缩小，④ 的"不划算"需要重新裁决。实测：`AGENT_ROOT` 全部消费面为 **10 文件 / 27 处引用**（非 60 文件），其中仅 2 处是 import 期模块常量（`index-sessions.ts:14`、`session-search-tool.ts:30`），其余在函数体内或已带 per-call 覆盖参数；入口本就是 per-run factory（注释明言 "Factory may run with no session"）；`config.memoryDir` 覆盖钩子已存在（`memory-store.ts:91`）；路由提示集中在 `buildMemoryTargetRoutingGuidance()` 一个函数；sqlite 有独立加载层（含 `bun:sqlite` shim 先例，换 `node:sqlite` 有落点）。两个 fork 前必须解决的新发现：`AGENT_ROOT` 身兼记忆存储根与 pi 运行时模块发现根（`pi-child-process.ts:239`），必须拆双根；并发多会话下"const→let 全局 setter"的捷径会串目录（跨用户泄露回归），需要参数穿透或 ALS。详见 ROADMAP.md 的 F0 spike 项。§二的"窄插件包不住"结论**不变**——本注记只更新 §④ 的 fork 成本估算。
+
 ---
 
 ## 三、什么时候值得回头看 hermes

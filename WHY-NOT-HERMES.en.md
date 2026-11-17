@@ -83,6 +83,8 @@ pi's `tool_call` genuinely can mutate input or block execution (`docs/extensions
 
 Turning scope into a hermes concept touches ~60 source files (the core of it: `AGENT_ROOT` from module constant to constructor parameter, target routing replaced by a host-supplied partition key). The measured cost far exceeds a 196-line rewrite.
 
+> **2026-11-17 re-probe note (hermes@0.11.0)**: the figure above is from the 0.9.10 probe and has shrunk materially. Measured now: `AGENT_ROOT` consumers are **10 files / 27 references** (not ~60), only 2 of them import-time module constants; the entry is already a per-run factory; `config.memoryDir` override exists (`memory-store.ts:91`); routing prompts are centralized in `buildMemoryTargetRoutingGuidance()`; sqlite loading is isolated (a `bun:sqlite` shim precedent exists). Two new pre-fork findings: `AGENT_ROOT` doubles as memory-storage root AND pi runtime module-discovery root (`pi-child-process.ts:239`) — must be split; a process-global setter shortcut would cross directories under concurrent sessions (leak regression) — param threading or ALS only. See ROADMAP.md item F0 for the decision-gate spike. The §二 wrapper conclusion is unchanged; this note only updates §④'s cost estimate.
+
 ---
 
 ## 3. When it is worth looking back at hermes

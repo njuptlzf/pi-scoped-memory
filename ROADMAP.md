@@ -50,6 +50,41 @@ consulted for feature shape, not for code.
 
 ## Items
 
+### F0 — Decision gate: fork-spike on pi-hermes-memory@0.11.0 (R1 gate)
+
+Re-probe (2026-11-17) shrank the fork estimate from WHY-NOT-HERMES §④'s
+"~60 files" to a concrete, small surface (see the addendum there). Before
+starting R1, run a time-boxed spike (1–2 days) to decide fork vs in-repo
+roadmap with data:
+
+1. **Per-session factory**: wrap the extension entry into an option-taking
+   factory (`createScopedHermesMemory({ dir })`, scopedMemory pattern). Entry
+   is already a per-run factory with `config.memoryDir` honored by
+   MemoryStore; remaining: thread `dir` through ~5–8 call sites that bypass
+   config (`skill-store.ts`, `session-search-tool.ts`, `index-sessions.ts`,
+   auto-consolidation locks) and make the 2 import-time constants
+   (`SESSIONS_DIR`, `DEFAULT_SESSIONS_DIR`) lazy.
+2. **Dual-root split**: `AGENT_ROOT` is both memory-storage root and pi
+   runtime module-discovery root (`pi-child-process.ts:239`). Split storage
+   root (per-scope) from runtime root (global) — do not scope the latter.
+3. **Routing guidance**: rewrite `buildMemoryTargetRoutingGuidance()` to
+   scope-relative wording.
+4. **Concurrency safety**: no process-global `setAgentRoot` shortcut —
+   interleaved sessions would cross directories. Param threading or ALS only.
+5. *(optional, bigger)* Swap `better-sqlite3` → `node:sqlite` in
+   `store/sqlite-native.ts` (shim precedent exists); kills the native dep.
+
+**Spike deliverables**: real diff size, hermes' test-suite pass rate, and a
+fork-delta ↔ upstream-surface mapping doc (discipline imported from
+njuptlzf/mcp-adapter's MAPPING.md: fork the boundary, not the engine; version
+tag tracks upstream, e.g. `hermes-0.11.0-scoped.1`).
+
+**Decision rule**: if the spike lands at ≤ ~15 changed files with tests green
+and a merge-drill against the next upstream release reads as routine, the
+fork replaces R1/R2/R4 (retrieval, hybrid, consolidation arrive with hermes)
+and the roadmap continues with R3/R5/R6/R7/R8 layered onto it. Otherwise R1
+starts as planned and the fork waits for its documented trigger.
+
 ### R1 — Keyword retrieval upgrade: BM25 over the scope's own index
 
 `recall` today is substring matching; it stops being adequate at "hundreds of
