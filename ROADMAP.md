@@ -137,11 +137,22 @@ is the more stable target — the port is four guarantees, not an API surface.
   (`memory-provider-conformance.test.ts`) and iterates the registry, so a new
   implementation is covered without writing a second suite.
 
-Still open: **item 3, scope-relative routing guidance.** The host now injects
-`promptSection()` verbatim, so `buildMemoryTargetRoutingGuidance()`'s "write
-preferences to `user`, cross-project lessons to `memory`" wording lands straight
-in the system prompt and must become scope-relative. It is the only remaining
-change that alters model behaviour.
+Still open: **item 3, scope-relative policy prompt.** Corrected attribution
+(2026-11-18): the text the host injects is not
+`buildMemoryTargetRoutingGuidance()` — that function only reaches
+review/flush/correction prompts, none of which the scoped entry mounts. What the
+host injects verbatim is `MEMORY_POLICY_PROMPT` (`constants.ts:111`, or the compact
+variant at `:165`, chosen by `resolveMemoryPolicyPrompt`). It says
+"memory: global notes, environment facts, cross-project tool behavior", offers a
+`project` write target that has no store behind it in a scoped tenant, and
+advertises `memory_search` / `session_search` — tools the scoped entry never
+registers. So item 3 is a **capability-aware policy prompt**, not a wording tweak:
+it has to be built from what is actually mounted (search? session search? skills?
+project store? scope isolated?) instead of being a `const`. Effort: the two consts
+become a builder, `resolveMemoryPolicyPrompt` takes the capability flags, one test
+assertion moves. Still the only remaining change that alters model behaviour — and
+now the largest correctness gap in a tenant, because a model told it has
+`memory_search` will try to use it.
 
 **F0 packaging + external registration closed (2026-11-17, later still).** The two
 open questions from the port slice are answered and implemented:
