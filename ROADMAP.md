@@ -74,6 +74,49 @@ roadmap with data:
 5. *(optional, bigger)* Swap `better-sqlite3` → `node:sqlite` in
    `store/sqlite-native.ts` (shim precedent exists); kills the native dep.
 
+**F0 progress, first slice (2026-11-17)** — branch `spike/f0-scoped-entry`,
+commit `7c23d00`:
+
+- **Item 1 (factory) done.** `createScopedHermesMemory({ storageRoot })` returns
+  `(pi) => handle` — the host binds the tenant by closure, so per-session
+  binding needs no env, no flag, no process-global "current tenant".
+- **Item 2 (dual root) done at the seam.** `src/scoped/roots.ts` splits
+  `storageRoot` (per tenant) from `runtimeRoot` (global, optional) and validates
+  absolute-only. `AGENT_ROOT` inside the engine is still eager at import time —
+  that is item 2's remaining half, and it only matters once the legacy entry is
+  mounted in a multi-tenant process (the scoped entry never reads it).
+- **Item 4 (concurrency) satisfied by construction.** No setter, no ALS: the
+  root is a closure per factory call, plus a duplicate-root guard so two stores
+  cannot open the same tenant directory twice in one process.
+- **Items 3 and 5 open.** Routing guidance still teaches global targets;
+  the sqlite swap is still unassessed.
+
+Three things the host contract forced into the design, none of which were
+visible from the roadmap:
+
+1. **`agent-chat` passes extensions as factories, not paths.**
+   `extensionFactories: [scopedMemory({ dir })]` in `packages/server/src/session.ts`
+   — so the tenant root arrives as a closure argument. That is why the curried
+   form is the primary API and why `process.env` never enters the picture.
+2. **Admission is a sixth gate item.** `extension-admission.ts` rejects any
+   declared extension file that reads `process.env`, calls `os.homedir()`,
+   imports `child_process`, or registers TUI commands. hermes' default entry
+   does all four, so the scoped entry is a separate composition (store + write
+   tool + policy prompt) rather than a wrapper around `src/index.ts`. Verified
+   with agent-chat's own `auditExtensionSource`: criteria 2/3/4 pass, criterion
+   1 (no default export) is the adapter file's job.
+3. **`bindExtensions` is conditional in the host** — it runs only when MCP
+   servers or manifest extension paths exist. A memory-only product therefore
+   never gets `session_start` / `before_agent_start`, so the write half works
+   and the injection half silently does not. Host fix or explicit host wiring;
+   documented in the fork's `docs/fork/UPSTREAM-MAPPING.md` §6.
+
+Also worth keeping: erasing one tenant on Windows fails with `EBUSY` unless the
+tenant's `.pi-hermes-locks.sqlite` is closed first, so `dispose()` closes that
+one connection (`AtomicLockCoordinator.closeHandle()`), not every tenant's.
+`tests/scoped/multi-tenant.test.ts` asserts the delete succeeds, because
+"one `rm -rf` = one tenant gone" is the promise this fork exists to keep.
+
 **Sync discipline, calibrated against `njuptlzf/mcp-adapter` (2026-11-17).**
 Its discipline is three artifacts, not one README claim: (a) `MAPPING.md` — a
 surface → upstream call-site **evidence** table; (b) `scripts/upstream-divergence.ts`
