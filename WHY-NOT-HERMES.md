@@ -81,6 +81,8 @@ pi 的 `tool_call` 确实能改写参数或阻止执行（`docs/extensions.md:10
 
 > **2026-11-17 重探注记（hermes@0.11.0）**：上段结论基于 0.9.10 探针，0.11.0 的 diff 面已显著缩小，④ 的"不划算"需要重新裁决。实测：`AGENT_ROOT` 全部消费面为 **10 文件 / 27 处引用**（非 60 文件），其中仅 2 处是 import 期模块常量（`index-sessions.ts:14`、`session-search-tool.ts:30`），其余在函数体内或已带 per-call 覆盖参数；入口本就是 per-run factory（注释明言 "Factory may run with no session"）；`config.memoryDir` 覆盖钩子已存在（`memory-store.ts:91`）；路由提示集中在 `buildMemoryTargetRoutingGuidance()` 一个函数；sqlite 有独立加载层（含 `bun:sqlite` shim 先例，换 `node:sqlite` 有落点）。两个 fork 前必须解决的新发现：`AGENT_ROOT` 身兼记忆存储根与 pi 运行时模块发现根（`pi-child-process.ts:239`），必须拆双根；并发多会话下"const→let 全局 setter"的捷径会串目录（跨用户泄露回归），需要参数穿透或 ALS。详见 ROADMAP.md 的 F0 spike 项。§二的"窄插件包不住"结论**不变**——本注记只更新 §④ 的 fork 成本估算。
 
+> **同一次重探对"常量堵不掉"的修正**：③ 末句"永远悬着的进程级常量（拦截规则一旦漏一条就又是泄露）"在**拦截式适配**路线下成立，但**不适用于 fork 路线**，原文把它当成 hermes 的结构性缺陷，说过头了。实测 27 处 `AGENT_ROOT` 引用中只有 2 处是 import 期求值的模块常量（`index-sessions.ts:14`、`session-search-tool.ts:30`），其余都在函数体内、可经参数或 config 覆盖；而那 2 处改成惰性求值是在 fork 自有面（`paths.ts` + 入口工厂）内完成的局部改动。所以准确的表述是：**常量确实需要改，但需要改的只有 2 处，且改动面收敛在 fork 拥有的边界文件里**——不是"改不动"。真正无法靠常量改造解决的只有并发语义（全局 setter 会串目录），那要用参数穿透或 ALS。
+
 ---
 
 ## 三、什么时候值得回头看 hermes

@@ -74,16 +74,56 @@ roadmap with data:
 5. *(optional, bigger)* Swap `better-sqlite3` → `node:sqlite` in
    `store/sqlite-native.ts` (shim precedent exists); kills the native dep.
 
-**Spike deliverables**: real diff size, hermes' test-suite pass rate, and a
-fork-delta ↔ upstream-surface mapping doc (discipline imported from
-njuptlzf/mcp-adapter's MAPPING.md: fork the boundary, not the engine; version
-tag tracks upstream, e.g. `hermes-0.11.0-scoped.1`).
+**Sync discipline, calibrated against `njuptlzf/mcp-adapter` (2026-11-17).**
+Its discipline is three artifacts, not one README claim: (a) `MAPPING.md` — a
+surface → upstream call-site **evidence** table; (b) `scripts/upstream-divergence.ts`
+(`npm run upstream:check`) — diffs fork ↔ `upstream/main` and classifies every
+file into *registered / diverged-but-not-registered / stale*, exiting `1` on
+stale; (c) a registry file (`skills/upstream-merge/references/special-cases.md`)
+that the check reads, plus branch policy (`upstream-merge/<version>` PRs,
+`.githooks/pre-push` + `no-direct-main-push.yml` blocking direct pushes).
 
-**Decision rule**: if the spike lands at ≤ ~15 changed files with tests green
-and a merge-drill against the next upstream release reads as routine, the
-fork replaces R1/R2/R4 (retrieval, hybrid, consolidation arrive with hermes)
-and the roadmap continues with R3/R5/R6/R7/R8 layered onto it. Otherwise R1
-starts as planned and the fork waits for its documented trigger.
+The analogy does not transfer unmodified — three deltas to carry over:
+
+- **D1 — the invariant is weaker, so enforcement must be blocking.** "Engine
+  untouched" is *structural* for mcp-adapter: the engine runs against a type
+  boundary (`UniversalHostSurface` ↔ `ExtensionAPI`), so a violation fails to
+  compile. A hermes fork mutates 10 upstream files instead; nothing fails when
+  an 11th edit slips in. Compensate with an allowlist CI gate that exits `1`.
+  Note the trap: mcp-adapter's own `check-pi-coupling.yml` is **advisory only**
+  (every path ends in `exit 0`) — it reports and never stops a merge. Do not
+  copy that half.
+- **D2 — measure conflict surface, not changed files.** Its retrospective
+  (`docs/upstream-merge-retrospective.md`) records the first real merge: 11
+  conflict files, ~1300 conflict lines, 768 lines of coupling re-introduced,
+  root-caused to *large-function aggregation* — `index.ts` held a 343-line
+  function that conflicted wholesale ("same-function-body" class, the hardest
+  to resolve). Translating to hermes: "10 files" is not the merge cost; the
+  question is which of our hunks land inside regions upstream also edits.
+  Leaving `store/memory-store.ts` (1309 lines) untouched is exactly right —
+  zero hunks there, so upstream edits to it merge cleanly. Wrapping `index.ts`
+  from outside the existing function is the safe shape; editing its body is the
+  risky one.
+- **D3 — stale detection is the half that pays.** A registry that never expires
+  decays into a lie, and hermes@0.9.10's "~60 files / constants can't be
+  routed" estimate — disproved by 0.11.0 — is precisely a stale entry. `stale`
+  means "our divergence no longer exists because upstream absorbed it"; that
+  signal is the trigger to re-probe upstream, so seed the registry from the
+  current 10 files / 27 `AGENT_ROOT` references and re-run the check per
+  release.
+
+**Spike deliverables**: real diff size *and* conflict-hunk count, hermes'
+test-suite pass rate at v0.11.0, the fork-delta ↔ upstream-surface mapping doc
+with an evidence column per row, plus the divergence registry and its
+`upstream:check` (blocking on stale). Version tag tracks upstream, e.g.
+`hermes-0.11.0-scoped.1`.
+
+**Decision rule**: if the spike lands at ≤ ~15 changed files with tests green,
+no hunk inside a function upstream actively edits, and a merge-drill against
+the next upstream release reads as routine, the fork replaces R1/R2/R4
+(retrieval, hybrid, consolidation arrive with hermes) and the roadmap continues
+with R3/R5/R6/R7/R8 layered onto it. Otherwise R1 starts as planned and the
+fork waits for its documented trigger.
 
 ### R1 — Keyword retrieval upgrade: BM25 over the scope's own index
 
