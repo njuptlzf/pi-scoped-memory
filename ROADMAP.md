@@ -38,9 +38,15 @@ consulted for feature shape, not for code.
 | Keyword retrieval | SQLite FTS5 index | case-insensitive substring scoring (`recallEntries`) | High once a scope passes ~hundreds of entries; plus a CJK pitfall found by probe — see R1 |
 | Injection policy | relevance-driven | last 60 lines / 4000 chars, recency-only | Medium — old-but-relevant points silently invisible |
 | Consolidation | auto-consolidation pass | none (compaction only trims count) | Medium — duplicate/stale facts accumulate |
+| Write-side conflict resolution | none beyond capture policies | exact-text dedup only | **High vs mem0** — mem0 resolves each candidate fact against similar existing memories at write time (ADD/UPDATE/DELETE/NOOP per mem0's own docs); this plugin accumulates contradictions and semantic duplicates verbatim until compaction drops by count. Mem0's docs name this the "stacked-contradictions failure" — long-lived user scopes hit it first. See R6 |
+| Temporal validity | none (fact superseded = silently duplicated) | only a single `at` timestamp per entry | Medium vs Zep/Graphiti (bi-temporal KG) and mem0 (fact invalidation) — superseded facts never get marked invalid; related to R6 |
+| Retrieval-quality regression suite | 732 tests, policy benchmarks | functional tests only — no standing recall-quality benchmark | Medium — R1/R2 acceptance is one-off synthetic; without a committed eval set, quality regressions land silently. See R7 |
+| Memory-op observability | policy/token stats | no per-scope counters (recall calls, hit rate, injection size) | Medium-low — hosts cannot see whether memory is used or worth its token budget. See R8 |
+| Procedural layer (failure → lessons) | procedural skills | `kind: failure` is a bare label | Low — see backlog B2 |
 | Memory tiers | user / memory / failure / project targets | 4 `kind` labels, retention treats them alike | Low — tiers are a tenant leak in hermes; `kind` + host-side dirs cover most of it |
 | Session search | searches past conversations | out of scope by design (host owns transcripts) | None — deliberate non-goal |
 | Secret scanning | built-in | host-side (agent-chat filters in its autoCapture) | None — host responsibility by contract |
+| Graph-structured memory | none | none | None today; Zep/Graphiti's temporal KG is a different product shape — see non-goals |
 
 ## Items
 
@@ -137,6 +143,19 @@ critical path. Options when it ever matters, in order of cost:
 - **Constraint check**: both options keep the jsonl as source of truth and the
   index rebuildable/deletable (constraint 2); no new dependencies.
 
+### B2 — Procedural layer: failure points become lessons
+
+hermes turns remembered failures into procedural skills; here `kind: failure`
+is a bare label. Low priority because the *effect* is achievable host-side
+(agent-chat's autoCapture can distill failure clusters into guidance entries).
+If the plugin ever wants it in-scope: a host-invoked pass that groups
+`failure` entries by BM25 similarity and writes back one "lesson" entry with
+tombstones for the consumed ones — same shape as R4's consolidation, restricted
+to one kind.
+
+- **Trigger**: a host asking for failure-driven guidance that host-side
+  distillation cannot express.
+
 ## Sourcing: import vs build
 
 What each item actually needs from the ecosystem, probed/verified
@@ -201,12 +220,82 @@ configuration at factory time (cap / TTL / pin), enforced at compaction.
 - **Acceptance**: expired kinds vanish from injection and recall; pinned
   entries survive compaction.
 
+### R6 — Write-side conflict resolution: semantic dedup and supersession
+
+The read side is covered by R1–R3; the **write side is where the plugin is
+most behind mem0**. Today a `remember` call appends unless the text matches an
+existing entry case-insensitively — paraphrases duplicate, and a contradictory
+new fact ("用户现在偏好浅色主题" after "偏好深色主题") coexists with the old one
+until count-based compaction silently drops one of them. mem0's documented
+design resolves this at **write time**: each candidate fact is compared against
+semantically similar existing memories and one of four operations is chosen —
+ADD / UPDATE / DELETE / NOOP (see Sources; their docs call the un-resolved
+alternative the "stacked-contradictions failure").
+
+**Design**: an optional host-injected `review?: (candidate, similar) => …`
+callback, mirroring R2's `embed` pattern (constraint 5 — no LLM in the
+plugin). Semantically similar neighbors come from the R2 vector cache when
+available (fall back to BM25 top-k). The default without `review` stays
+exactly today's behavior. Superseded entries get a tombstone that carries
+`invalidAt` + the replacing text — append-only, so constraint 6 holds, and the
+supersession chain stays reconstructible from the jsonl (constraint 2). This
+gives Zep-style temporal validity (valid_at / invalid_at) in the lightweight
+jsonl shape.
+
+- **Trigger**: R2 shipped (needs the similarity source), or a real
+  contradiction/duplicate complaint from a host.
+- **Constraint check**: host-provided review callback only; tombstones keep
+  the append-only model; all state in-scope.
+- **Acceptance**: a contradiction pair written in sequence recalls only the
+  surviving fact, with the superseded one discoverable via `invalidAt` in the
+  jsonl; paraphrase duplicates collapse; without `review`, behavior is
+  byte-identical to R5-era behavior.
+
+### R7 — Standing retrieval-quality benchmark (regression suite)
+
+R1/R2 acceptance is a one-off synthetic check. mem0 maintains public memory
+benchmarks (LOCOMO) and hermes ships 732 tests; this repo has no committed
+recall-quality eval set, so a tokenizer change or a scoring tweak can silently
+regress quality. Add `eval/` in-repo: a fixed corpus of ≥20 synthetic scopes
+covering zh / en / mixed entries, paraphrase pairs, contradiction pairs,
+2-char CJK queries, error-code lookups, and adversarial entries (prompt-injection
+text inside a memory point), with a scoring script reporting recall@5 / MRR and
+a pass line. Run it in CI on every PR that touches recall paths.
+
+- **Trigger**: R1 implementation begins (the suite is its acceptance harness).
+- **Constraint check**: eval corpus is test material, not runtime state —
+  lives in the repo, not in scope dirs.
+- **Acceptance**: `npm run eval:recall` prints a recall@5 / MRR table per
+  category; CI fails below the pass line.
+
+### R8 — Per-scope memory-op observability
+
+No host can currently answer "is memory being used, and is it worth its token
+budget?" — recall call counts, hit rate, injection size are all invisible.
+Add an opt-in `stats()` export returning per-scope counters (remember/recall/
+forget calls, recall hit rate, last injection char/token estimate, index
+freshness), written as a counter line in the scope dir (append-only, one
+aggregation per N ops — no cross-scope file). Hosts like agent-chat can route
+it into their audit plane.
+
+- **Trigger**: any host instrumentation request (agent-chat audit plane is the
+  first candidate).
+- **Constraint check**: counters live in-scope, never shared (constraint 3);
+  disabled by default.
+- **Acceptance**: a scripted 100-op session yields counters matching the op
+  log; `stats()` on a scope with stats disabled returns a noop shape, not an
+  error.
+
 ## Explicit non-goals
 
 - Tenant/user/project management inside the plugin (the founding decision).
 - Session transcript search (the host owns transcripts; agent-chat keeps them
   in SQLite).
 - A database that spans scopes or survives scope deletion.
+- Graph-structured / entity-relation memory (Zep-Graphiti shape): no trigger
+  today. Point memory with R6 supersession covers the failure modes a graph
+  would solve at this scale; revisit only if hosts report relational queries
+  ("everything linked to project X") that recall cannot serve.
 - Becoming or wrapping hermes in-process (WHY-NOT-HERMES §二; the only honest
   fork route is per-scope instantiation — a rewrite, not a wrapper, and only
   worth it if R1–R4 prove insufficient).
@@ -215,6 +304,10 @@ configuration at factory time (cap / TTL / pin), enforced at compaction.
 
 - `pi-hermes-memory@0.9.10` — probed locally; findings and line references in
   [WHY-NOT-HERMES.md](./WHY-NOT-HERMES.md).
+- mem0 write-side design (ADD / UPDATE / DELETE / NOOP, write-time conflict
+  resolution, "stacked-contradictions failure" terminology) — from mem0's own
+  documentation (mem0.ai library: memory eviction and forgetting in AI agents;
+  docs.mem0.ai memory evaluation), verified 2026-11-17.
 - Industry capability references (feature shape only, not integrable here):
   Mem0 (per-user profiles, multi-tenant chatbots), Zep/Graphiti (temporal
   knowledge graph), Letta (OS-style memory tiers). Claims about their current
