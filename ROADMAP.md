@@ -133,6 +133,32 @@ one connection (`AtomicLockCoordinator.closeHandle()`), not every tenant's.
 系统提示，所以 `buildMemoryTargetRoutingGuidance()` 里"偏好写 user、跨项目经验写 memory"
 的指引必须改成作用域相对说法——这是剩下唯一会真正影响模型行为的改动。
 
+**F0 target corrected (2026-11-17, later).** agent-chat is pre-launch, and memory
+is now a **port** rather than a plugin: the host defines `MemoryProvider`
+(`packages/protocol/src/memory-provider.ts`) and a product picks an
+implementation with `agent.memory: { provider }`. The fork's obligation therefore
+shrank from "drop-in compatible with scopedMemory" to "satisfy the port", which
+is the more stable target — the port is four guarantees, not an API surface.
+
+- `openScopedHermesMemory(options)` returns the tenant (store, `promptSection`,
+  `erase`, `dispose`) **without pi**; `mount(pi)` attaches tools and hooks. The
+  host needs the prompt text while building `DefaultResourceLoader`, before any
+  session exists.
+- `selfInjects: false`: the host appends the section itself. This also retires
+  the hazard found in the previous slice — with a conditional `bindExtensions`,
+  a self-injecting provider's hook silently never fires.
+- `erase()` is first-class because the port demands it: close the tenant's lock
+  database, delete exactly that tenant root, leave neighbours untouched.
+- The contract suite lives in the host repo
+  (`memory-provider-conformance.test.ts`) and iterates the registry, so a new
+  implementation is covered without writing a second suite.
+
+Still open: **item 3, scope-relative routing guidance.** The host now injects
+`promptSection()` verbatim, so `buildMemoryTargetRoutingGuidance()`'s "write
+preferences to `user`, cross-project lessons to `memory`" wording lands straight
+in the system prompt and must become scope-relative. It is the only remaining
+change that alters model behaviour.
+
 **Sync discipline, calibrated against `njuptlzf/mcp-adapter` (2026-11-17).**
 Its discipline is three artifacts, not one README claim: (a) `MAPPING.md` — a
 surface → upstream call-site **evidence** table; (b) `scripts/upstream-divergence.ts`
