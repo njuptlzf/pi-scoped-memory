@@ -59,19 +59,30 @@ without harm at any time.
 - **Acceptance**: recall@5 on a 1000-entry synthetic scope strictly better than
   substring scoring; a deleted index self-rebuilds on next recall.
 
-### R2 — Semantic recall: host-injected embeddings
+### R2 — Hybrid recall: FTS + host-injected embeddings, rank-fused
 
-Optional embedding layer on top of R1. The factory gains an optional
-`embed?: (texts: string[]) => Promise<number[][]>` parameter; embeddings cached
-per entry inside the scope dir. No provider SDK, no key handling inside the
-plugin (constraint 5). Reference shape: Mem0-style fact retrieval, minus the
-managed service.
+Two indexes inside the scope dir, one query path. R1's FTS index and an
+optional vector cache (embeddings of entry texts, computed via a host-injected
+`embed?: (texts: string[]) => Promise<number[][]>`) are queried independently;
+results are fused with Reciprocal Rank Fusion (`score = Σ 1/(k + rank_i)`,
+k = 60) into a single ranked list. Fusion is chosen over score addition because
+BM25 and cosine scores are not on a common scale. No provider SDK, no key
+handling inside the plugin (constraint 5). Reference shape: Mem0-style fact
+retrieval, minus the managed service.
 
 - **Trigger**: R1 shipped and keyword recall demonstrably misses paraphrases.
-- **Constraint check**: without `embed`, everything behaves exactly as today;
-  cache lives in-scope (constraint 2).
-- **Acceptance**: paraphrase pairs that substring/FTS miss are recalled;
-  removing the callback never breaks a session.
+- **Degradation ladder** (each rung fully functional): both indexes → FTS only
+  → substring scoring. Without `embed`, everything behaves exactly as after
+  R1; a failed or timed-out embedding call falls back to FTS-only for that
+  query — never blocks or errors a session.
+- **Cache invalidation**: embedding cache is keyed by entry text hash;
+  compaction and consolidation drop stale vectors alongside the entries they
+  served. Cache lives in-scope and rebuilds by re-calling `embed`
+  (constraint 2).
+- **Acceptance**: paraphrase pairs that FTS alone misses are recalled via the
+  vector leg; removing the callback never breaks a session; a query returns
+  within 50 ms P95 at 1000 entries with warm caches (local benchmark, no
+  network).
 
 ### R3 — Injection policy: relevance + kind weighting, not recency-only
 
