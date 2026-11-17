@@ -59,6 +59,12 @@ points in one scope".
 - Node's built-in `Intl.Segmenter('zh', { granularity: 'word' })` segments
   Chinese memory-style text correctly (用户/偏好/深色/主题, `ERR_AUTH_403`
   kept whole). No external segmentation package needed.
+- ICU data completeness in minimal images is verified, not assumed: a CI probe
+  (`.github/workflows/icu-probe.yml`, manual dispatch) ran the same
+  segmentation check inside `node:22-slim`, `node:22-alpine`, `node:24-slim`
+  and `node:24-alpine` — all resolve the segmenter locale to `zh` (small-icu
+  would fall back to `en`), bundle ICU 78.3, and produce identical correct
+  tokens, including 2-char words (登录 / 认证).
 
 **Design**: index entries with [MiniSearch](https://github.com/lucaong/minisearch)
 (`^7.2.0`, zero dependencies, BM25 scoring, `toJSON()`/`loadJSON()`
