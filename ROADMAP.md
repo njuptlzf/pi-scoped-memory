@@ -143,6 +143,30 @@ preferences to `user`, cross-project lessons to `memory`" wording lands straight
 in the system prompt and must become scope-relative. It is the only remaining
 change that alters model behaviour.
 
+**F0 packaging + external registration closed (2026-11-17, later still).** The two
+open questions from the port slice are answered and implemented:
+
+- **npm, not a source link.** The fork publishes as `@njuptlzf/pi-hermes-memory`
+  (the unscoped name is upstream's), version `0.11.0-scoped.1`, with conditional
+  exports — `agent-chat-source` → `src/*.ts` for their tsc, `default` → `dist/*.js`
+  for their runtime — and `prepack` building `dist` (gitignored). Verified the way
+  a registry install behaves: `npm pack` → install the tarball into a scratch
+  consumer → import by package name under **plain node, no tsx**. Only the publish
+  action remains, and it is not a code change: the inherited `publish.yml` ships on
+  tag via OIDC. `PROVIDER_VERSION` must equal `package.json`'s `version`, asserted
+  by a test — a host reporting the wrong engine version is worse than none.
+- **External registration, not a builtin entry.** The registry keeps exactly one
+  builtin (`scoped-memory`, the default, because a product that declares nothing
+  still needs memory) and loads everything else from
+  `agent.memoryProviders: ["./x.ts" | "@scope/pkg/subpath"]`. Loading runs the same
+  admission scan as extensions (no env/homedir, no `child_process`, no TUI surface),
+  refuses paths that escape the product dir, refuses duplicate ids, and memoises per
+  file. `hermes-scoped` is registered this way — the host no longer names it in
+  code, only in a product manifest plus a three-line adapter file.
+
+Still open: **item 3, scope-relative routing guidance** — unchanged and now the only
+change that alters model behaviour.
+
 **Sync discipline, calibrated against `njuptlzf/mcp-adapter` (2026-11-17).**
 Its discipline is three artifacts, not one README claim: (a) `MAPPING.md` — a
 surface → upstream call-site **evidence** table; (b) `scripts/upstream-divergence.ts`
