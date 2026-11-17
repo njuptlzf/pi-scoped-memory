@@ -118,6 +118,19 @@ with an evidence column per row, plus the divergence registry and its
 `upstream:check` (blocking on stale). Version tag tracks upstream, e.g.
 `hermes-0.11.0-scoped.1`.
 
+**Baseline (measured 2026-11-17, Windows 10 / Node 22.22.2, before any engine
+edit)**: 60 test files, 1,197 cases, 1,174 pass, 10 fail, 1 file hangs, and
+`tsc --noEmit` clean. Every one of the 10 is environment-shaped (no MSVC for
+`node-gyp`, no `pi` binary on PATH, POSIX path/mode expectations, Windows spawn
+quoting) and none sits in a file the fork intends to touch. So "tests green"
+means **no new failure versus this table**, not "all green": upstream's own
+`npm test` is fail-fast and aborts at the first failing file, which here
+reported "2 of 54" while 51 files never ran. Install detail worth keeping:
+`npm install --ignore-scripts` is sufficient — `better-sqlite3@13.0.3` vendors
+`prebuilds/win32-x64.node`, and FTS5 was verified working, so the absence of
+MSVC costs nothing in the required path. Numbers and per-file causes:
+`docs/fork/F0-BASELINE.md` on the fork branch.
+
 **Decision rule**: if the spike lands at ≤ ~15 changed files with tests green,
 no hunk inside a function upstream actively edits, and a merge-drill against
 the next upstream release reads as routine, the fork replaces R1/R2/R4
